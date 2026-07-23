@@ -1,0 +1,73 @@
+name: lint
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Syntax check
+        run: bash -n git-trees && bash -n install.sh
+
+      # Advisory: shellcheck has not been run against this script yet, so it is
+      # expected to report findings. Drop continue-on-error once clean.
+      - name: ShellCheck
+        continue-on-error: true
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y shellcheck
+          shellcheck -s bash git-trees install.sh
+
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up a bare-repo layout and exercise commands
+        run: |
+          set -e
+          git config --global user.email ci@example.com
+          git config --global user.name CI
+          git config --global init.defaultBranch main
+
+          mkdir -p /tmp/tt/origin && cd /tmp/tt/origin
+          git init -q -b main .
+          echo hi > a.txt && git add . && git commit -qm init
+          git branch feature/x
+
+          cd /tmp/tt && git clone -q --bare /tmp/tt/origin proj/trees-bare.git
+          echo "gitdir: ./trees-bare.git" > proj/.git
+          cd proj
+          git config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'
+          git fetch -q origin
+          git remote set-head origin --auto >/dev/null
+
+          T="$GITHUB_WORKSPACE/git-trees"
+          chmod +x "$T"
+
+          bash "$T" help
+
+          bash "$T" add feature/x
+          up=$(git -C feature-x rev-parse --abbrev-ref '@{upstream}')
+          [ "$up" = "origin/feature/x" ] || { echo "FAIL: upstream was $up"; exit 1; }
+
+          bash "$T" add brandnew
+          up=$(git -C brandnew rev-parse --abbrev-ref '@{upstream}' 2>/dev/null || echo none)
+          [ "$up" != "origin/main" ] || { echo "FAIL: new branch inherited origin/main"; exit 1; }
+
+          p=$(bash "$T" add another --print-path 2>/dev/null)
+          [ -d "$p" ] || { echo "FAIL: --print-path returned '$p'"; exit 1; }
+
+          bash "$T" list
+          bash "$T" list --json | python3 -c 'import json,sys; json.load(sys.stdin)'
+
+          git branch fresh origin/main
+          if bash "$T" clean 2>&1 | grep -A50 'merged into' | grep -q '  fresh$'; then
+            echo "FAIL: fresh branch listed as merged"; exit 1
+          fi
+
+          echo "smoke tests passed"

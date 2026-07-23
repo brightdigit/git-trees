@@ -1,0 +1,32 @@
+# AGENTS.md
+
+This repository uses a **bare repo + git worktrees** layout, managed by
+[`git-trees`](https://github.com/brightdigit/git-trees).
+
+## Layout
+
+```
+<repo-root>/
+├── trees-bare.git/  bare git repo — never modify directly
+├── .git             file pointing at trees-bare.git
+└── <name>/          one worktree per branch, each its own working copy
+```
+
+Worktrees share a single object store but have independent working trees,
+indexes, and HEADs.
+
+## Rules
+
+1. Stay inside your assigned worktree. Do not `cd` into a sibling worktree or
+   above the repo root.
+2. Do not `git checkout` a different branch. To work on another branch, request a
+   new worktree.
+3. Never touch `trees-bare.git/`.
+4. Push with `git push -u origin HEAD` — upstream tracking may not be set.
+5. Other agents may be working in sibling worktrees concurrently. Do not `git gc`,
+   rewrite shared history, or force-push branches you were not assigned.
+
+## Build & test
+
+Run all commands from your worktree root. See the project README for
+project-specific commands.

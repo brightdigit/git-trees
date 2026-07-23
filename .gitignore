@@ -1,0 +1,3 @@
+# Local throwaway fixtures for exercising git-trees
+/tmp/*
+!/tmp/.gitkeep

@@ -1,0 +1,342 @@
+#!/usr/bin/env bash
+# git-trees — bare repo + worktree management
+#
+# Install: place on PATH as `git-trees`, chmod +x, then use `git trees <cmd>`.
+#
+#   git trees init <org/repo|repo> [--host h] [--dir d]
+#   git trees add <branch> [base] [--print-path]
+#   git trees track [path]
+#   git trees list [--json]            (alias: ls)
+#   git trees clean [--older-than N] [--merged|--gone] [--apply]
+#
+# Env (all optional):
+#   TREES_HOST             default host for init (default: github.com)
+#   TREES_ORG              default org; if unset, bare repo names are rejected
+#   TREES_AGENTS_TEMPLATE  AGENTS.md copied into each new worktree
+
+set -uo pipefail
+
+: "${TREES_HOST:=}"
+: "${TREES_ORG:=}"
+: "${TREES_AGENTS_TEMPLATE:=$HOME/.config/git-trees/AGENTS.md}"
+
+# --- internals ---------------------------------------------------------------
+
+_root() {
+  local common
+  common=$(git rev-parse --git-common-dir 2>/dev/null) || return 1
+  cd "$(dirname "$common")" 2>/dev/null && pwd
+}
+
+_path_for() {   # _path_for <branch> -> worktree path or empty
+  git worktree list --porcelain \
+    | awk -v b="refs/heads/$1" '/^worktree /{p=$2} $0=="branch "b{print p}'
+}
+
+_default_branch() {
+  local d c
+  d=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')
+  [ -n "$d" ] && { echo "$d"; return 0; }
+  for c in main master; do
+    git show-ref --verify --quiet "refs/remotes/origin/$c" && { echo "$c"; return 0; }
+  done
+  echo main
+}
+
+_ref_info() {   # _ref_info <branch> -> upstream|track|date
+  git for-each-ref --format='%(upstream:short)|%(upstream:track)|%(committerdate:short)' \
+    "refs/heads/$1"
+}
+
+# --- init --------------------------------------------------------------------
+
+cmd_init() {
+  local host="" arg="" dir="" repo
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --host) host="${2:-}"; shift 2 ;;
+      --dir)  dir="${2:-}";  shift 2 ;;
+      -*)     echo "git trees init: unknown option $1" >&2; return 1 ;;
+      *)      arg="$1";      shift ;;
+    esac
+  done
+
+  [ -z "$arg" ] && {
+    echo "usage: git trees init <org/repo|repo> [--host h] [--dir d]" >&2
+    return 1
+  }
+
+  case "$arg" in
+    */*) repo="$arg" ;;
+    *)
+      [ -z "$TREES_ORG" ] && {
+        echo "git trees init: '$arg' has no org and TREES_ORG is unset — pass <org/repo>" >&2
+        return 1
+      }
+      repo="$TREES_ORG/$arg" ;;
+  esac
+
+  : "${host:=${TREES_HOST:-github.com}}"
+  : "${dir:=${repo##*/}}"
+
+  [ -e "$dir" ] && { echo "git trees init: $dir already exists" >&2; return 1; }
+
+  mkdir -p "$dir" || return 1
+  if ! git clone --bare "https://$host/$repo.git" "$dir/trees-bare.git"; then
+    rm -rf "$dir"
+    return 1
+  fi
+
+  # Pointer so plain git works from the container root; bare store stays visible.
+  echo "gitdir: ./trees-bare.git" > "$dir/.git"
+  git -C "$dir" config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'
+  git -C "$dir" fetch origin
+  git -C "$dir" remote set-head origin --auto >/dev/null 2>&1
+
+  [ -f "$TREES_AGENTS_TEMPLATE" ] && cp "$TREES_AGENTS_TEMPLATE" "$dir/AGENTS.md"
+
+  local def
+  def=$(cd "$dir" && _default_branch)
+  echo "initialized $dir (default branch: $def)"
+}
+
+# --- add ---------------------------------------------------------------------
+
+cmd_add() {
+  local br="" base="" print_path=0 root path dir
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --print-path) print_path=1; shift ;;
+      -*) echo "git trees add: unknown option $1" >&2; return 1 ;;
+      *)
+        if [ -z "$br" ]; then br="$1"
+        elif [ -z "$base" ]; then base="$1"
+        else echo "git trees add: unexpected argument $1" >&2; return 1
+        fi
+        shift ;;
+    esac
+  done
+
+  [ -z "$br" ] && { echo "usage: git trees add <branch> [base] [--print-path]" >&2; return 1; }
+
+  root=$(_root) || { echo "git trees add: not in a git repo" >&2; return 1; }
+
+  path=$(_path_for "$br")
+  if [ -n "$path" ]; then
+    if [ "$print_path" -eq 1 ]; then echo "$path"; else
+      echo "git trees add: worktree already exists at $path" >&2
+    fi
+    return 0
+  fi
+
+  dir="$root/${br//\//-}"
+
+  if git show-ref --verify --quiet "refs/heads/$br"; then
+    [ -n "$base" ] && echo "git trees add: $br exists — ignoring base '$base'" >&2
+    git worktree add "$dir" "$br" >&2 || return 1
+  elif git ls-remote --exit-code --heads origin "$br" >/dev/null 2>&1; then
+    [ -n "$base" ] && echo "git trees add: origin/$br exists — ignoring base '$base'" >&2
+    git fetch origin "$br" >&2 || return 1
+    git worktree add --track -b "$br" "$dir" "origin/$br" >&2 || return 1
+  else
+    : "${base:=origin/$(_default_branch)}"
+    # --no-track: a new branch must not inherit the base ref's upstream,
+    # or it would silently push to the base branch.
+    git worktree add --no-track -b "$br" "$dir" "$base" >&2 || return 1
+  fi
+
+  cmd_track "$dir" >&2
+
+  [ -f "$TREES_AGENTS_TEMPLATE" ] && [ ! -f "$dir/AGENTS.md" ] \
+    && cp "$TREES_AGENTS_TEMPLATE" "$dir/AGENTS.md"
+
+  if [ "$print_path" -eq 1 ]; then
+    echo "$dir"
+  else
+    echo "$dir" >&2
+  fi
+}
+
+# --- track -------------------------------------------------------------------
+
+cmd_track() {
+  local path="${1:-.}" br
+  br=$(git -C "$path" symbolic-ref --short HEAD 2>/dev/null) || {
+    echo "git trees track: detached HEAD or not a worktree: $path" >&2
+    return 1
+  }
+
+  if git -C "$path" rev-parse --abbrev-ref '@{upstream}' >/dev/null 2>&1; then
+    return 0
+  fi
+
+  if git -C "$path" ls-remote --exit-code --heads origin "$br" >/dev/null 2>&1; then
+    git -C "$path" fetch origin "$br" \
+      && git -C "$path" branch --set-upstream-to="origin/$br" "$br"
+  else
+    git -C "$path" push -u origin HEAD
+  fi
+}
+
+# --- list --------------------------------------------------------------------
+
+cmd_list() {
+  local json=0 rows="" br path up track age dirty
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --json) json=1; shift ;;
+      *) echo "git trees list: unknown option $1" >&2; return 1 ;;
+    esac
+  done
+
+  while IFS=$'\t' read -r br path; do
+    IFS='|' read -r up track age <<< "$(_ref_info "$br")"
+    dirty="clean"
+    [ -n "$(git -C "$path" status --porcelain 2>/dev/null)" ] && dirty="dirty"
+    rows+="$br"$'\t'"${up:--}"$'\t'"${track:--}"$'\t'"$age"$'\t'"$dirty"$'\t'"$path"$'\n'
+  done < <(
+    git worktree list --porcelain \
+      | awk '/^worktree /{p=$2} /^branch /{sub("refs/heads/","",$2); print $2"\t"p}'
+  )
+
+  while read -r br; do
+    [ -n "$(_path_for "$br")" ] && continue
+    IFS='|' read -r up track age <<< "$(_ref_info "$br")"
+    rows+="$br"$'\t'"${up:--}"$'\t'"${track:--}"$'\t'"$age"$'\t'"-"$'\t'"(none)"$'\n'
+  done < <(git for-each-ref --format='%(refname:short)' refs/heads)
+
+  if [ "$json" -eq 1 ]; then
+    printf '%s' "$rows" | awk -F'\t' '
+      BEGIN { print "["; sep = "" }
+      NF {
+        for (i = 1; i <= NF; i++) gsub(/"/, "\\\"", $i)
+        printf "%s  {\"branch\":\"%s\",\"upstream\":\"%s\",\"track\":\"%s\",\"date\":\"%s\",\"state\":\"%s\",\"path\":\"%s\"}\n", \
+          sep, $1, $2, $3, $4, $5, $6
+        sep = ","
+      }
+      END { print "]" }'
+  else
+    { printf 'BRANCH\tUPSTREAM\tTRACK\tDATE\tSTATE\tPATH\n'; printf '%s' "$rows"; } \
+      | column -t -s$'\t'
+  fi
+}
+
+# --- clean -------------------------------------------------------------------
+
+cmd_clean() {
+  local days="" apply=0 do_gone=1 do_merged=1 do_stale=0 root def br p wt
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --older-than) days="${2:-}"; do_stale=1; shift 2 ;;
+      --gone)       do_gone=1; do_merged=0; shift ;;
+      --merged)     do_merged=1; do_gone=0; shift ;;
+      --apply)      apply=1; shift ;;
+      *) echo "git trees clean: unknown option $1" >&2; return 1 ;;
+    esac
+  done
+
+  root=$(_root) || { echo "git trees clean: not in a git repo" >&2; return 1; }
+  def=$(_default_branch)
+  git fetch --prune origin
+
+  if [ "$do_gone" -eq 1 ]; then
+    echo "== branches with gone upstream =="
+    while read -r br; do
+      [ -z "$br" ] && continue
+      p=$(_path_for "$br")
+      echo "  $br${p:+  ($p)}"
+      if [ "$apply" -eq 1 ]; then
+        [ -n "$p" ] && git worktree remove "$p"
+        git branch -d "$br" 2>/dev/null \
+          || echo "    ! unmerged — use: git branch -D $br"
+      fi
+    done < <(
+      git for-each-ref --format='%(refname:short) %(upstream:track)' refs/heads \
+        | grep '\[gone\]' | awk '{print $1}'
+    )
+  fi
+
+  if [ "$do_merged" -eq 1 ]; then
+    echo "== branches merged into $def =="
+    while read -r br; do
+      [ -z "$br" ] && continue
+      # Skip branches that have no commits of their own — a branch pointing at
+      # the base, or freshly created from it, is "merged" but not finished work.
+      [ "$(git rev-list --count "origin/$def..$br" 2>/dev/null)" = "0" ] && continue
+      p=$(_path_for "$br")
+      echo "  $br${p:+  ($p)}"
+      if [ "$apply" -eq 1 ]; then
+        [ -n "$p" ] && git worktree remove "$p"
+        git branch -d "$br"
+      fi
+    done < <(
+      git branch --merged "origin/$def" --format='%(refname:short)' 2>/dev/null \
+        | grep -vx "$def"
+    )
+  fi
+
+  if [ "$do_stale" -eq 1 ]; then
+    [ -z "$days" ] && { echo "git trees clean: --older-than needs a number of days" >&2; return 1; }
+    local common
+    common=$(cd "$(git rev-parse --git-common-dir)" && pwd)
+    echo "== worktrees untouched >${days}d =="
+    while read -r wt; do
+      [ "$wt" = "$root" ] && continue
+      [ "$wt" = "$PWD" ] && continue
+      [ "$wt" = "$common" ] && continue   # bare store (trees-bare.git), not a worktree
+      if [ -n "$(find "$wt" -maxdepth 0 -mtime +"$days" 2>/dev/null)" ]; then
+        echo "  $wt"
+        [ "$apply" -eq 1 ] && git worktree remove "$wt"
+      fi
+    done < <(git worktree list --porcelain | awk '/^worktree /{print $2}')
+  fi
+
+  git worktree prune
+  [ "$apply" -eq 0 ] && echo "(report only — pass --apply to execute)"
+  return 0
+}
+
+# --- usage / dispatch --------------------------------------------------------
+
+usage() {
+  cat >&2 <<'EOF'
+usage: git trees <command> [args]
+
+  init <org/repo|repo> [--host h] [--dir d]   create bare repo + worktree layout
+  add <branch> [base] [--print-path]          create a worktree (sets upstream)
+  track [path]                                ensure branch has an upstream
+  list [--json]                               worktrees + branches without one
+  clean [--older-than N] [--merged|--gone] [--apply]
+                                              report/remove stale trees, branches
+
+env: TREES_HOST, TREES_ORG, TREES_AGENTS_TEMPLATE
+
+note: `add` prints the worktree path but cannot cd your shell. For that:
+  trees() {
+    case "$1" in
+      add) shift; cd "$(git trees add "$@" --print-path)" ;;
+      *)   git trees "$@" ;;
+    esac
+  }
+EOF
+}
+
+main() {
+  local cmd="${1:-help}"
+  [ $# -gt 0 ] && shift
+
+  case "$cmd" in
+    init)      cmd_init  "$@" ;;
+    add)       cmd_add   "$@" ;;
+    track)     cmd_track "$@" ;;
+    list|ls)   cmd_list  "$@" ;;
+    clean)     cmd_clean "$@" ;;
+    help|--help|-h) usage; return 0 ;;
+    *) echo "git trees: unknown command '$cmd'" >&2; usage; return 1 ;;
+  esac
+}
+
+main "$@"
