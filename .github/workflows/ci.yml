@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Syntax check
+        run: bash -n git-trees && bash -n install.sh && bash -n tests/smoke.sh
+
+      - name: Install ShellCheck
+        run: |
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            sudo apt-get update -qq && sudo apt-get install -y shellcheck
+          else
+            brew install shellcheck
+          fi
+
+      - name: ShellCheck
+        run: shellcheck -s bash git-trees install.sh tests/smoke.sh
+
+      - name: Smoke tests
+        run: tests/smoke.sh ./git-trees
