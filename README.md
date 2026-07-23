@@ -45,23 +45,48 @@ indexes, and HEADs. Branch names are slugified for directory names
 ## Install
 
 ```bash
-curl -o ~/.local/bin/git-trees https://raw.githubusercontent.com/<you>/git-trees/main/git-trees
+curl -o ~/.local/bin/git-trees \
+  https://raw.githubusercontent.com/brightdigit/git-trees/main/git-trees
 chmod +x ~/.local/bin/git-trees
 ```
 
-Anything on `PATH` named `git-trees` becomes `git trees`. Requires bash 4+ and
-`column` (both standard on macOS and most Linux).
+Or clone and run the installer (also seeds `~/.config/git-trees/AGENTS.md`):
+
+```bash
+git clone https://github.com/brightdigit/git-trees.git
+cd git-trees && ./install.sh
+```
+
+Anything on `PATH` named `git-trees` becomes `git trees`. Requires bash 4+.
 
 ## Commands
 
-### `git trees init <org/repo|repo> [--host h] [--dir d]`
+### `git trees init <org/repo|repo|url> [--host h] [--dir d]`
 
 Creates the bare clone, writes the `.git` pointer, fixes the fetch refspec (a
 bare clone doesn't set up remote-tracking refs by default), and resolves
 `origin/HEAD`.
 
-A bare repo name requires `TREES_ORG` to be set; otherwise pass `org/repo`.
-Host defaults to `github.com`.
+Accepts:
+
+| Form | Example |
+|---|---|
+| `org/repo` | `brightdigit/git-trees` → `https://github.com/…` |
+| `repo` | requires `TREES_ORG` |
+| HTTPS / SSH URL | `https://github.com/org/repo.git`, `git@github.com:org/repo.git` |
+
+Directory defaults to the repo name; override with `--dir`. `--host` applies to
+the shorthand forms only (ignored when a URL is given).
+
+### `git trees root [dir]`
+
+Prints the project root (the directory that contains the bare store and
+worktrees). If that root has no `.git` pointer yet but contains exactly one
+bare `*.git` (e.g. a grove layout), writes `gitdir: ./<name>.git` first —
+idempotent, does not rename the bare store — then prints the path on stdout.
+
+Useful for adopting an existing worktree container without breaking other
+tools that already know the `*.git` name.
 
 ### `git trees add <branch> [base] [--print-path]`
 
@@ -88,8 +113,9 @@ Useful for repairing worktrees created before this tool.
 
 ### `git trees list [--json]` (alias `ls`)
 
-Table of branch, upstream, ahead/behind, last commit date, clean/dirty, and
-path. Includes branches with no worktree, shown with path `(none)`.
+One entry per branch with upstream, ahead/behind, last commit date, clean/dirty,
+and path (relative to the project root). Includes branches with no worktree,
+shown with path `(none)`. `--json` emits the same fields as an array.
 
 ### `git trees clean [--older-than N] [--merged|--gone] [--apply]`
 
@@ -134,7 +160,6 @@ trees() {
 - `list` spawns several processes per branch — fine for dozens, slow for hundreds.
 - `add` ignores `base` when the branch already exists rather than failing.
 - Bash-only (uses process substitution); not POSIX sh.
-- `init` assumes HTTPS remotes.
 
 ## Prior art
 

@@ -3,7 +3,8 @@
 #
 # Install: place on PATH as `git-trees`, chmod +x, then use `git trees <cmd>`.
 #
-#   git trees init <org/repo|repo> [--host h] [--dir d]
+#   git trees init <org/repo|repo|url> [--host h] [--dir d]
+#   git trees root [dir]               print project root; link .git if missing
 #   git trees add <branch> [base] [--print-path]
 #   git trees track [path]
 #   git trees list [--json]            (alias: ls)
@@ -33,6 +34,15 @@ _path_for() {   # _path_for <branch> -> worktree path or empty
     | awk -v b="refs/heads/$1" '/^worktree /{p=$2} $0=="branch "b{print p}'
 }
 
+# Absolute path -> path relative to $1; unchanged if outside.
+_rel_to() {
+  case "$2" in
+    "$1") echo . ;;
+    "$1"/*) echo "${2#"$1"/}" ;;
+    *) echo "$2" ;;
+  esac
+}
+
 _default_branch() {
   local d c
   d=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')
@@ -48,13 +58,67 @@ _ref_info() {   # _ref_info <branch> -> upstream|track|date
     "refs/heads/$1"
 }
 
+_is_bare_dir() {
+  local p="$1"
+  [ -f "$p/HEAD" ] && [ -d "$p/refs" ] && [ -d "$p/objects" ] && [ ! -e "$p/.git" ] || return 1
+  [ "$(git -C "$p" config --bool --get core.bare 2>/dev/null)" = "true" ]
+}
+
+# Print basename of the sole bare *.git under $1, or error.
+_find_bare() {
+  local dir="$1" found="" name
+  for name in "$dir"/*.git; do
+    [ -d "$name" ] || continue
+    _is_bare_dir "$name" || continue
+    if [ -n "$found" ]; then
+      echo "git trees root: multiple bare repos in $dir — leave one *.git" >&2
+      return 1
+    fi
+    found=${name##*/}
+  done
+  [ -n "$found" ] || {
+    echo "git trees root: no bare *.git in $dir" >&2
+    return 1
+  }
+  echo "$found"
+}
+
+# Write $1/.git -> ./<bare>.git when missing. Idempotent if already valid.
+_ensure_git_pointer() {
+  local root="$1" bare
+  if [ -e "$root/.git" ]; then
+    if [ -d "$root/.git" ]; then
+      echo "git trees root: $root/.git is a directory (regular clone, not a trees root)" >&2
+      return 1
+    fi
+    if ! git -C "$root" rev-parse --git-common-dir >/dev/null 2>&1; then
+      echo "git trees root: $root/.git exists but is not a valid gitdir pointer" >&2
+      return 1
+    fi
+    return 0
+  fi
+  bare=$(_find_bare "$root") || return 1
+  echo "gitdir: ./$bare" > "$root/.git"
+  echo "linked ./$bare" >&2
+}
+
 # --- init --------------------------------------------------------------------
 
+# Last path segment of a clone URL → default directory name.
+_url_basename() {
+  local s="$1"
+  s=${s%/}
+  s=${s%.git}
+  s=${s##*/}
+  s=${s##*:}   # git@host:repo (no slash)
+  echo "$s"
+}
+
 cmd_init() {
-  local host="" arg="" dir="" repo
+  local host="" arg="" dir="" repo url="" host_set=0
   while [ $# -gt 0 ]; do
     case "$1" in
-      --host) host="${2:-}"; shift 2 ;;
+      --host) host="${2:-}"; host_set=1; shift 2 ;;
       --dir)  dir="${2:-}";  shift 2 ;;
       -*)     echo "git trees init: unknown option $1" >&2; return 1 ;;
       *)      arg="$1";      shift ;;
@@ -62,27 +126,44 @@ cmd_init() {
   done
 
   [ -z "$arg" ] && {
-    echo "usage: git trees init <org/repo|repo> [--host h] [--dir d]" >&2
+    echo "usage: git trees init <org/repo|repo|url> [--host h] [--dir d]" >&2
     return 1
   }
 
   case "$arg" in
-    */*) repo="$arg" ;;
+    git@*|ssh://*|https://*|http://*|file://*)
+      url=$arg
+      : "${dir:=$(_url_basename "$url")}"
+      [ "$host_set" -eq 1 ] &&
+        echo "git trees init: --host ignored when a URL is given" >&2
+      ;;
+    */*)
+      repo=$arg
+      : "${host:=${TREES_HOST:-github.com}}"
+      : "${dir:=${repo##*/}}"
+      url="https://$host/$repo.git"
+      ;;
     *)
       [ -z "$TREES_ORG" ] && {
-        echo "git trees init: '$arg' has no org and TREES_ORG is unset — pass <org/repo>" >&2
+        echo "git trees init: '$arg' has no org and TREES_ORG is unset — pass <org/repo> or a URL" >&2
         return 1
       }
-      repo="$TREES_ORG/$arg" ;;
+      repo="$TREES_ORG/$arg"
+      : "${host:=${TREES_HOST:-github.com}}"
+      : "${dir:=$arg}"
+      url="https://$host/$repo.git"
+      ;;
   esac
 
-  : "${host:=${TREES_HOST:-github.com}}"
-  : "${dir:=${repo##*/}}"
+  [ -z "$dir" ] && {
+    echo "git trees init: could not derive directory name from '$arg' — pass --dir" >&2
+    return 1
+  }
 
   [ -e "$dir" ] && { echo "git trees init: $dir already exists" >&2; return 1; }
 
   mkdir -p "$dir" || return 1
-  if ! git clone --bare "https://$host/$repo.git" "$dir/trees-bare.git"; then
+  if ! git clone --bare "$url" "$dir/trees-bare.git"; then
     rm -rf "$dir"
     return 1
   fi
@@ -98,6 +179,44 @@ cmd_init() {
   local def
   def=$(cd "$dir" && _default_branch)
   echo "initialized $dir (default branch: $def)"
+}
+
+# --- root --------------------------------------------------------------------
+
+cmd_root() {
+  local dir="${1:-.}" root
+
+  [ $# -gt 1 ] && {
+    echo "usage: git trees root [dir]" >&2
+    return 1
+  }
+  [ -d "$dir" ] || {
+    echo "git trees root: not a directory: $dir" >&2
+    return 1
+  }
+  dir=$(cd "$dir" && pwd)
+
+  # Prefer a local bare *.git (grove / trees container) over walking up into a
+  # parent git repo — otherwise `root` inside a nested fixture finds the wrong top.
+  local name has_bare=0
+  for name in "$dir"/*.git; do
+    [ -d "$name" ] && _is_bare_dir "$name" && { has_bare=1; break; }
+  done
+  if [ "$has_bare" -eq 1 ]; then
+    _ensure_git_pointer "$dir" || return 1
+    echo "$dir"
+    return 0
+  fi
+
+  # Inside a worktree: discover the shared container, then ensure its pointer.
+  if root=$(cd "$dir" && _root 2>/dev/null); then
+    _ensure_git_pointer "$root" || return 1
+    echo "$root"
+    return 0
+  fi
+
+  echo "git trees root: not a trees project (no bare *.git, not a worktree)" >&2
+  return 1
 }
 
 # --- add ---------------------------------------------------------------------
@@ -182,7 +301,7 @@ cmd_track() {
 # --- list --------------------------------------------------------------------
 
 cmd_list() {
-  local json=0 rows="" br path up track age dirty
+  local json=0 rows="" br path up track age dirty root rel
 
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -191,11 +310,14 @@ cmd_list() {
     esac
   done
 
+  root=$(_root) || { echo "git trees list: not in a git repo" >&2; return 1; }
+
   while IFS=$'\t' read -r br path; do
     IFS='|' read -r up track age <<< "$(_ref_info "$br")"
     dirty="clean"
     [ -n "$(git -C "$path" status --porcelain 2>/dev/null)" ] && dirty="dirty"
-    rows+="$br"$'\t'"${up:--}"$'\t'"${track:--}"$'\t'"$age"$'\t'"$dirty"$'\t'"$path"$'\n'
+    rel=$(_rel_to "$root" "$path")
+    rows+="$br"$'\t'"${up:--}"$'\t'"${track:--}"$'\t'"$age"$'\t'"$dirty"$'\t'"$rel"$'\n'
   done < <(
     git worktree list --porcelain \
       | awk '/^worktree /{p=$2} /^branch /{sub("refs/heads/","",$2); print $2"\t"p}'
@@ -218,8 +340,16 @@ cmd_list() {
       }
       END { print "]" }'
   else
-    { printf 'BRANCH\tUPSTREAM\tTRACK\tDATE\tSTATE\tPATH\n'; printf '%s' "$rows"; } \
-      | column -t -s$'\t'
+    printf '%s' "$rows" | awk -F'\t' '
+      NF {
+        if (n++) print ""
+        print $1
+        print "  upstream  " $2
+        print "  track     " $3
+        print "  date      " $4
+        print "  state     " $5
+        print "  path      " $6
+      }'
   fi
 }
 
@@ -305,7 +435,8 @@ usage() {
   cat >&2 <<'EOF'
 usage: git trees <command> [args]
 
-  init <org/repo|repo> [--host h] [--dir d]   create bare repo + worktree layout
+  init <org/repo|repo|url> [--host h] [--dir d]   create bare repo + worktree layout
+  root [dir]                                  print project root; link .git if missing
   add <branch> [base] [--print-path]          create a worktree (sets upstream)
   track [path]                                ensure branch has an upstream
   list [--json]                               worktrees + branches without one
@@ -330,6 +461,7 @@ main() {
 
   case "$cmd" in
     init)      cmd_init  "$@" ;;
+    root)      cmd_root  "$@" ;;
     add)       cmd_add   "$@" ;;
     track)     cmd_track "$@" ;;
     list|ls)   cmd_list  "$@" ;;

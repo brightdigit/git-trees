@@ -38,8 +38,5 @@ case ":$PATH:" in
   *) echo "warning: $DEST is not on PATH — add it to use \`git trees\`" >&2 ;;
 esac
 
-command -v column >/dev/null 2>&1 \
-  || echo "warning: 'column' not found — table output will fail (use --json)" >&2
-
 echo
 echo "try: git trees help"

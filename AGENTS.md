@@ -14,7 +14,7 @@ covers constraints on changing it.
 copying it onto `PATH`. Do not split into sourced libraries.
 
 **Pure git.** No `gh`, `glab`, `jq`, or other external CLIs. `git`, coreutils,
-`awk`, and `column` only. An earlier `pr` subcommand was removed specifically to
+and `awk` only. An earlier `pr` subcommand was removed specifically to
 keep this property — do not reintroduce forge integration.
 
 **Cannot cd the shell.** A git subcommand is a separate process. Any feature
