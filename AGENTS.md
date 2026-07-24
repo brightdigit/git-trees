@@ -71,7 +71,8 @@ Then exercise the paths. Things worth checking after any change:
 - `clean` — a freshly cut branch must not appear under "merged"
 - `git trees` outside a repo — clean error, nonzero exit
 
-Also run `bash -n git-trees` for syntax and `shellcheck git-trees` if available.
+Automated coverage lives in `.github/workflows/ci.yml` (ubuntu + macOS). Also run
+`bash -n git-trees` for syntax and `shellcheck git-trees` if available.
 
 `init` needs network and is not covered by the above.
 
