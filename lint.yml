@@ -37,7 +37,7 @@ jobs:
           mkdir -p /tmp/tt/origin && cd /tmp/tt/origin
           git init -q -b main .
           echo hi > a.txt && git add . && git commit -qm init
-          git branch feature/x
+          git branch feature-x
 
           cd /tmp/tt && git clone -q --bare /tmp/tt/origin proj/trees-bare.git
           echo "gitdir: ./trees-bare.git" > proj/.git
@@ -51,9 +51,25 @@ jobs:
 
           bash "$T" help
 
-          bash "$T" add feature/x
+          if bash "$T" add feature/x 2>/tmp/slash-err; then
+            echo "FAIL: add should reject branch names containing /"; exit 1
+          fi
+          grep -q "must not contain '/'" /tmp/slash-err || {
+            echo "FAIL: missing slash-rejection message"; cat /tmp/slash-err; exit 1
+          }
+
+          bash "$T" add feature-x
           up=$(git -C feature-x rev-parse --abbrev-ref '@{upstream}')
-          [ "$up" = "origin/feature/x" ] || { echo "FAIL: upstream was $up"; exit 1; }
+          [ "$up" = "origin/feature-x" ] || { echo "FAIL: upstream was $up"; exit 1; }
+
+          mkdir leftover-dir
+          if bash "$T" add leftover-dir 2>/tmp/collide-err; then
+            echo "FAIL: add should reject an existing directory"; exit 1
+          fi
+          grep -q "directory already exists" /tmp/collide-err || {
+            echo "FAIL: missing collision message"; cat /tmp/collide-err; exit 1
+          }
+          rmdir leftover-dir
 
           bash "$T" add brandnew
           up=$(git -C brandnew rev-parse --abbrev-ref '@{upstream}' 2>/dev/null || echo none)

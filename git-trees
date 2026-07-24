@@ -242,6 +242,13 @@ cmd_add() {
 
   [ -z "$br" ] && { echo "usage: git trees add <branch> [base] [--print-path]" >&2; return 1; }
 
+  case "$br" in
+    */*)
+      echo "git trees add: branch names must not contain '/'; use dashes (e.g. feature-x), not feature/x" >&2
+      return 1
+      ;;
+  esac
+
   root=$(_root) || { echo "git trees add: not in a git repo" >&2; return 1; }
 
   path=$(_path_for "$br")
@@ -252,7 +259,11 @@ cmd_add() {
     return 0
   fi
 
-  dir="$root/${br//\//-}"
+  dir="$root/$br"
+  if [ -e "$dir" ]; then
+    echo "git trees add: directory already exists: $dir" >&2
+    return 1
+  fi
 
   if git show-ref --verify --quiet "refs/heads/$br"; then
     [ -n "$base" ] && echo "git trees add: $br exists — ignoring base '$base'" >&2
@@ -268,7 +279,7 @@ cmd_add() {
     git worktree add --no-track -b "$br" "$dir" "$base" >&2 || return 1
   fi
 
-  cmd_track "$dir" >&2
+  cmd_track "$dir" >&2 || return 1
 
   [ -f "$TREES_AGENTS_TEMPLATE" ] && [ ! -f "$dir/AGENTS.md" ] \
     && cp "$TREES_AGENTS_TEMPLATE" "$dir/AGENTS.md"
