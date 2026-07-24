@@ -4,7 +4,7 @@
 # Install: place on PATH as `git-trees`, chmod +x, then use `git trees <cmd>`.
 #
 #   git trees init <org/repo|repo|url> [--host h] [--dir d]
-#   git trees root [dir]               print project root; link .git if missing
+#   git trees root [dir] [--agents]    print project root; link .git if missing
 #   git trees add <branch> [base] [--print-path]
 #   git trees track [path]
 #   git trees list [--json]            (alias: ls)
@@ -13,7 +13,7 @@
 # Env (all optional):
 #   TREES_HOST             default host for init (default: github.com)
 #   TREES_ORG              default org; if unset, bare repo names are rejected
-#   TREES_AGENTS_TEMPLATE  AGENTS.md copied into each new worktree
+#   TREES_AGENTS_TEMPLATE  AGENTS.md seeded at the container root
 
 set -uo pipefail
 
@@ -105,6 +105,25 @@ _ensure_git_pointer() {
   echo "linked ./$bare" >&2
 }
 
+# Copy the AGENTS.md template to $1, the container root. The template describes
+# the bare-repo + worktree layout as a whole, so it belongs beside the bare store
+# and never inside an individual worktree — a copy there is untracked noise in
+# every `git status` and invites being committed to the branch.
+# No-op when unconfigured or already present. Notice goes to stderr: callers
+# print paths on stdout.
+_seed_agents() {
+  [ -f "$TREES_AGENTS_TEMPLATE" ] || return 0
+  # Any existing path (including a broken symlink) is occupied — never overwrite.
+  [ -e "$1/AGENTS.md" ] || [ -L "$1/AGENTS.md" ] && return 0
+  # noclobber create: refuses to replace a file that appears between check and write.
+  if (set -C; cat -- "$TREES_AGENTS_TEMPLATE" > "$1/AGENTS.md"); then
+    echo "wrote $1/AGENTS.md" >&2
+    return 0
+  fi
+  [ -e "$1/AGENTS.md" ] || [ -L "$1/AGENTS.md" ] && return 0
+  return 1
+}
+
 # --- init --------------------------------------------------------------------
 
 # Last path segment of a clone URL → default directory name.
@@ -177,7 +196,7 @@ cmd_init() {
   git -C "$dir" fetch origin
   git -C "$dir" remote set-head origin --auto >/dev/null 2>&1
 
-  [ -f "$TREES_AGENTS_TEMPLATE" ] && cp "$TREES_AGENTS_TEMPLATE" "$dir/AGENTS.md"
+  _seed_agents "$dir" || return 1
 
   local def
   def=$(cd "$dir" && _default_branch)
@@ -187,12 +206,27 @@ cmd_init() {
 # --- root --------------------------------------------------------------------
 
 cmd_root() {
-  local dir="${1:-.}" root
+  local dir="" seed_agents=0 root
 
-  [ $# -gt 1 ] && {
-    echo "usage: git trees root [dir]" >&2
-    return 1
-  }
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --agents) seed_agents=1; shift ;;
+      -*)
+        echo "git trees root: unknown option $1" >&2
+        usage
+        return 1
+        ;;
+      *)
+        if [ -z "$dir" ]; then dir="$1"; shift
+        else
+          echo "git trees root: unexpected argument $1" >&2
+          usage
+          return 1
+        fi ;;
+    esac
+  done
+  : "${dir:=.}"
+
   [ -d "$dir" ] || {
     echo "git trees root: not a directory: $dir" >&2
     return 1
@@ -207,6 +241,9 @@ cmd_root() {
   done
   if [ "$has_bare" -eq 1 ]; then
     _ensure_git_pointer "$dir" || return 1
+    if [ "$seed_agents" -eq 1 ]; then
+      _seed_agents "$dir" || return 1
+    fi
     echo "$dir"
     return 0
   fi
@@ -214,6 +251,9 @@ cmd_root() {
   # Inside a worktree: discover the shared container, then ensure its pointer.
   if root=$(cd "$dir" && _root 2>/dev/null); then
     _ensure_git_pointer "$root" || return 1
+    if [ "$seed_agents" -eq 1 ]; then
+      _seed_agents "$root" || return 1
+    fi
     echo "$root"
     return 0
   fi
@@ -280,9 +320,6 @@ cmd_add() {
   fi
 
   cmd_track "$dir" >&2 || return 1
-
-  [ -f "$TREES_AGENTS_TEMPLATE" ] && [ ! -f "$dir/AGENTS.md" ] \
-    && cp "$TREES_AGENTS_TEMPLATE" "$dir/AGENTS.md"
 
   if [ "$print_path" -eq 1 ]; then
     echo "$dir"
@@ -470,7 +507,7 @@ usage() {
 usage: git trees <command> [args]
 
   init <org/repo|repo|url> [--host h] [--dir d]   create bare repo + worktree layout
-  root [dir]                                  print project root; link .git if missing
+  root [dir] [--agents]                       print project root; link .git if missing
   add <branch> [base] [--print-path]          create a worktree (sets upstream)
   track [path]                                ensure branch has an upstream
   list [--json]                               worktrees + branches without one
