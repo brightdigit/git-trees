@@ -34,7 +34,7 @@ you can audit in a sitting.
 <repo>/
 ├── trees-bare.git/  bare git repo — never modified directly
 ├── .git             file containing "gitdir: ./trees-bare.git"
-├── AGENTS.md        copied from template, if configured
+├── AGENTS.md        seeded from template, if configured — root only
 └── <branch-name>/   one worktree per branch
 ```
 
@@ -78,7 +78,7 @@ Accepts:
 Directory defaults to the repo name; override with `--dir`. `--host` applies to
 the shorthand forms only (ignored when a URL is given).
 
-### `git trees root [dir]`
+### `git trees root [dir] [--agents]`
 
 Prints the project root (the directory that contains the bare store and
 worktrees). If that root has no `.git` pointer yet but contains exactly one
@@ -87,6 +87,11 @@ idempotent, does not rename the bare store — then prints the path on stdout.
 
 Useful for adopting an existing worktree container without breaking other
 tools that already know the `*.git` name.
+
+`--agents` also seeds `AGENTS.md` at that root from `TREES_AGENTS_TEMPLATE`, for
+containers that `init` did not create. Skipped if the file already exists or no
+template is configured; the notice goes to stderr, so the path on stdout stays
+clean for `$(git trees root)`.
 
 ### `git trees add <branch> [base] [--print-path]`
 
@@ -140,7 +145,7 @@ removes the repo root or your current directory.
 |---|---|---|
 | `TREES_HOST` | `github.com` | Host for `init` URLs |
 | `TREES_ORG` | *(unset)* | Default org; if unset, bare repo names are rejected |
-| `TREES_AGENTS_TEMPLATE` | `~/.config/git-trees/AGENTS.md` | Copied into each new worktree |
+| `TREES_AGENTS_TEMPLATE` | `~/.config/git-trees/AGENTS.md` | Seeded at the container root by `init` (and `root --agents`) |
 
 ## Shell wrapper (optional)
 

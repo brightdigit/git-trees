@@ -30,7 +30,7 @@ CFG="$HOME/.config/git-trees"
 if [ -f "$SRC/AGENTS.md.template" ] && [ ! -f "$CFG/AGENTS.md" ]; then
   mkdir -p "$CFG"
   cp "$SRC/AGENTS.md.template" "$CFG/AGENTS.md"
-  echo "installed $CFG/AGENTS.md (edit to taste; copied into each new worktree)"
+  echo "installed $CFG/AGENTS.md (edit to taste; seeded at the container root)"
 fi
 
 case ":$PATH:" in
