@@ -2,6 +2,18 @@
 
 Guidance for working on this repository.
 
+## Memory & Corrections Convention
+
+Before doing any work, read [`.claude/agent-notes.md`](.claude/agent-notes.md).
+That file is the source of truth for user corrections and standing always/never
+directives in this repo.
+
+Maintain it as an append-only running log: when the user corrects you or gives
+an always/never instruction, append one line proactively (do not wait to be
+asked). Keep newest entries at the bottom, one line per entry. If a new
+directive supersedes an older one, update or remove the stale line instead of
+leaving both.
+
 ## What this is
 
 `git-trees` is a single bash script installed as a git subcommand. It manages a
