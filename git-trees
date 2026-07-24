@@ -31,7 +31,10 @@ _root() {
 
 _path_for() {   # _path_for <branch> -> worktree path or empty
   git worktree list --porcelain \
-    | awk -v b="refs/heads/$1" '/^worktree /{p=$2} $0=="branch "b{print p}'
+    | awk -v b="refs/heads/$1" '
+        /^worktree /{p=$0; sub(/^worktree /, "", p)}
+        $0=="branch "b{print p}
+      '
 }
 
 # Absolute path -> path relative to $1; unchanged if outside.
@@ -320,7 +323,10 @@ cmd_list() {
     rows+="$br"$'\t'"${up:--}"$'\t'"${track:--}"$'\t'"$age"$'\t'"$dirty"$'\t'"$rel"$'\n'
   done < <(
     git worktree list --porcelain \
-      | awk '/^worktree /{p=$2} /^branch /{sub("refs/heads/","",$2); print $2"\t"p}'
+      | awk '
+          /^worktree /{p=$0; sub(/^worktree /, "", p)}
+          /^branch /{sub("refs/heads/","",$2); print $2"\t"p}
+        '
   )
 
   while read -r br; do
@@ -379,7 +385,12 @@ cmd_clean() {
       p=$(_path_for "$br")
       echo "  $br${p:+  ($p)}"
       if [ "$apply" -eq 1 ]; then
-        [ -n "$p" ] && git worktree remove "$p"
+        if [ -n "$p" ]; then
+          if ! git worktree remove "$p"; then
+            echo "    ! worktree remove failed — skipped branch delete for $br" >&2
+            continue
+          fi
+        fi
         git branch -d "$br" 2>/dev/null \
           || echo "    ! unmerged — use: git branch -D $br"
       fi
@@ -399,8 +410,14 @@ cmd_clean() {
       p=$(_path_for "$br")
       echo "  $br${p:+  ($p)}"
       if [ "$apply" -eq 1 ]; then
-        [ -n "$p" ] && git worktree remove "$p"
-        git branch -d "$br"
+        if [ -n "$p" ]; then
+          if ! git worktree remove "$p"; then
+            echo "    ! worktree remove failed — skipped branch delete for $br" >&2
+            continue
+          fi
+        fi
+        git branch -d "$br" 2>/dev/null \
+          || echo "    ! unmerged — use: git branch -D $br"
       fi
     done < <(
       git branch --merged "origin/$def" --format='%(refname:short)' 2>/dev/null \
@@ -410,18 +427,24 @@ cmd_clean() {
 
   if [ "$do_stale" -eq 1 ]; then
     [ -z "$days" ] && { echo "git trees clean: --older-than needs a number of days" >&2; return 1; }
-    local common
+    local common cwd_canon wt_canon
     common=$(cd "$(git rev-parse --git-common-dir)" && pwd)
+    cwd_canon=$(cd "$PWD" && pwd -P)
     echo "== worktrees untouched >${days}d =="
     while read -r wt; do
       [ "$wt" = "$root" ] && continue
-      [ "$wt" = "$PWD" ] && continue
       [ "$wt" = "$common" ] && continue   # bare store (trees-bare.git), not a worktree
+      wt_canon=$(cd "$wt" && pwd -P) || continue
+      # Skip the worktree containing cwd (root or any subdirectory).
+      [ "$cwd_canon" = "$wt_canon" ] && continue
+      case "$cwd_canon" in
+        "$wt_canon"/*) continue ;;
+      esac
       if [ -n "$(find "$wt" -maxdepth 0 -mtime +"$days" 2>/dev/null)" ]; then
         echo "  $wt"
         [ "$apply" -eq 1 ] && git worktree remove "$wt"
       fi
-    done < <(git worktree list --porcelain | awk '/^worktree /{print $2}')
+    done < <(git worktree list --porcelain | awk '/^worktree /{sub(/^worktree /, ""); print}')
   fi
 
   git worktree prune
