@@ -6,7 +6,7 @@ external CLI dependencies, no forge integration.
 ```
 git trees init brightdigit/some-repo
 cd some-repo
-git trees add feature/x
+git trees add feature-x
 git trees list
 git trees clean --older-than 30
 ```
@@ -39,8 +39,8 @@ you can audit in a sitting.
 ```
 
 Worktrees share a single object store but have independent working trees,
-indexes, and HEADs. Branch names are slugified for directory names
-(`feature/x` → `feature-x`).
+indexes, and HEADs. The worktree directory matches the branch name, so branch
+names must not contain `/` — use dashes (`feature-x`, not `feature/x`).
 
 ## Install
 
@@ -98,10 +98,13 @@ Creates a worktree, handling three cases:
 | Branch exists on `origin` | Fetch, create with `--track` |
 | Branch is new | Create from `base` (default `origin/<default>`) with `--no-track` |
 
-Upstream is always set afterward via `track`. `--print-path` writes the path to
-stdout and everything else to stderr, for shell wrappers.
+Upstream is always set afterward via `track`; if that push/upstream setup fails,
+`add` exits nonzero (the worktree may still exist). `--print-path` writes the
+path to stdout and everything else to stderr, for shell wrappers.
 
-If the branch already exists, `base` is ignored with a warning.
+Branch names must not contain `/` (rejected with a clear error). If the target
+directory already exists, `add` fails rather than inventing a new name. If the
+branch already exists, `base` is ignored with a warning.
 
 ### `git trees track [path]`
 

@@ -49,7 +49,7 @@ No test framework. Verify by building a throwaway repo pair:
 rm -rf /tmp/tt && mkdir -p /tmp/tt/origin && cd /tmp/tt/origin
 git init -q -b main . && git config user.email t@t && git config user.name t
 echo hi > a.txt && git add . && git commit -qm init
-git branch feature/x
+git branch feature-x
 
 cd /tmp/tt && git clone -q --bare /tmp/tt/origin proj/trees-bare.git
 echo "gitdir: ./trees-bare.git" > proj/.git
@@ -61,9 +61,11 @@ git fetch -q origin && git remote set-head origin --auto >/dev/null
 
 Then exercise the paths. Things worth checking after any change:
 
-- `add feature/x` — remote branch exists; upstream must be `origin/feature/x`
+- `add feature/x` — must fail (no `/` in branch names)
+- `add feature-x` — remote branch exists; upstream must be `origin/feature-x`
 - `add brandnew` — no remote branch; upstream must be `origin/brandnew`, **not**
-  `origin/main`
+  `origin/main`; failed track/push must exit nonzero
+- `add` into an existing directory — clear collision error, nonzero exit
 - `add x --print-path` — stdout must be *only* the path
 - `list --json` — valid JSON, includes branches with no worktree
 - `clean` — a freshly cut branch must not appear under "merged"
