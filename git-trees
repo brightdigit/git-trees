@@ -477,7 +477,7 @@ usage: git trees <command> [args]
   clean [--older-than N] [--merged|--gone] [--apply]
                                               report/remove stale trees, branches
 
-env: TREES_HOST, TREES_ORG, TREES_AGENTS_TEMPLATE
+env (optional): TREES_ORG, TREES_HOST, TREES_AGENTS_TEMPLATE — see README
 
 note: `add` prints the worktree path but cannot cd your shell. For that:
   trees() {

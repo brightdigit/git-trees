@@ -40,3 +40,9 @@ esac
 
 echo
 echo "try: git trees help"
+
+if [ -z "${TREES_ORG:-}" ]; then
+  echo
+  echo "optional: set a default org so you can write 'git trees init <repo>'"
+  echo "  echo 'export TREES_ORG=your-org' >> ~/.zshrc && source ~/.zshrc"
+fi

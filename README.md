@@ -59,6 +59,26 @@ cd git-trees && ./install.sh
 
 Anything on `PATH` named `git-trees` becomes `git trees`. Requires bash 4+.
 
+## Configuration
+
+All three variables are optional. Add to `~/.zshrc` (or `~/.bashrc`):
+
+```zsh
+export TREES_ORG=your-org
+```
+
+That's usually all you need — `TREES_HOST` defaults to `github.com` and
+`TREES_AGENTS_TEMPLATE` defaults to `~/.config/git-trees/AGENTS.md`, which is
+where `install.sh` puts the template.
+
+With `TREES_ORG` set, `git trees init my-repo` expands to `your-org/my-repo`.
+Without it, bare repo names are rejected and you must pass `org/repo`.
+
+Reload with `source ~/.zshrc`, then check with `echo $TREES_ORG`.
+
+Note that these are shell-global. For a repo under a different org, pass
+`org/repo` explicitly rather than changing the variable.
+
 ## Commands
 
 ### `git trees init <org/repo|repo|url> [--host h] [--dir d]`
