@@ -113,8 +113,15 @@ _ensure_git_pointer() {
 # print paths on stdout.
 _seed_agents() {
   [ -f "$TREES_AGENTS_TEMPLATE" ] || return 0
-  [ -f "$1/AGENTS.md" ] && return 0
-  cp "$TREES_AGENTS_TEMPLATE" "$1/AGENTS.md" && echo "wrote $1/AGENTS.md" >&2
+  # Any existing path (including a broken symlink) is occupied — never overwrite.
+  [ -e "$1/AGENTS.md" ] || [ -L "$1/AGENTS.md" ] && return 0
+  # noclobber create: refuses to replace a file that appears between check and write.
+  if (set -C; cat -- "$TREES_AGENTS_TEMPLATE" > "$1/AGENTS.md"); then
+    echo "wrote $1/AGENTS.md" >&2
+    return 0
+  fi
+  [ -e "$1/AGENTS.md" ] || [ -L "$1/AGENTS.md" ] && return 0
+  return 1
 }
 
 # --- init --------------------------------------------------------------------
@@ -189,7 +196,7 @@ cmd_init() {
   git -C "$dir" fetch origin
   git -C "$dir" remote set-head origin --auto >/dev/null 2>&1
 
-  _seed_agents "$dir"
+  _seed_agents "$dir" || return 1
 
   local def
   def=$(cd "$dir" && _default_branch)
@@ -204,10 +211,17 @@ cmd_root() {
   while [ $# -gt 0 ]; do
     case "$1" in
       --agents) seed_agents=1; shift ;;
-      -*) echo "git trees root: unknown option $1" >&2; return 1 ;;
+      -*)
+        echo "git trees root: unknown option $1" >&2
+        usage
+        return 1
+        ;;
       *)
         if [ -z "$dir" ]; then dir="$1"; shift
-        else echo "git trees root: unexpected argument $1" >&2; return 1
+        else
+          echo "git trees root: unexpected argument $1" >&2
+          usage
+          return 1
         fi ;;
     esac
   done
@@ -227,7 +241,9 @@ cmd_root() {
   done
   if [ "$has_bare" -eq 1 ]; then
     _ensure_git_pointer "$dir" || return 1
-    [ "$seed_agents" -eq 1 ] && _seed_agents "$dir"
+    if [ "$seed_agents" -eq 1 ]; then
+      _seed_agents "$dir" || return 1
+    fi
     echo "$dir"
     return 0
   fi
@@ -235,7 +251,9 @@ cmd_root() {
   # Inside a worktree: discover the shared container, then ensure its pointer.
   if root=$(cd "$dir" && _root 2>/dev/null); then
     _ensure_git_pointer "$root" || return 1
-    [ "$seed_agents" -eq 1 ] && _seed_agents "$root"
+    if [ "$seed_agents" -eq 1 ]; then
+      _seed_agents "$root" || return 1
+    fi
     echo "$root"
     return 0
   fi
