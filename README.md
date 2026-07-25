@@ -8,7 +8,6 @@ git trees init brightdigit/some-repo
 cd some-repo
 git trees add feature-x
 git trees list
-git trees clean --older-than 30
 ```
 
 ## Why
@@ -20,7 +19,6 @@ support, but the built-in porcelain leaves gaps:
 - `git worktree add -b` silently inherits the base ref's upstream, so a new
   branch ends up tracking `main` and pushes to the wrong place
 - No single view of worktrees *and* branches that lack one
-- No cleanup for branches whose remote is gone
 - Bare-clone setup for this layout is a four-command incantation
 
 `git-trees` covers those. It's deliberately small and readable — one bash file
@@ -39,8 +37,9 @@ you can audit in a sitting.
 ```
 
 Worktrees share a single object store but have independent working trees,
-indexes, and HEADs. The worktree directory matches the branch name, so branch
-names must not contain `/` — use dashes (`feature-x`, not `feature/x`).
+indexes, and HEADs. Every worktree is a direct child of the container root, so a
+branch's `/` becomes a `-` in the directory name: `feature/x` checks out into
+`feature-x/` while the branch keeps its real name.
 
 ## Install
 
@@ -139,9 +138,12 @@ If the push or upstream setup fails, `add` exits nonzero (the worktree may still
 exist). `--print-path` writes the path to stdout and everything else to stderr,
 for shell wrappers.
 
-Branch names must not contain `/` (rejected with a clear error). If the target
-directory already exists, `add` fails rather than inventing a new name. If the
-branch already exists, `base` is ignored with a warning.
+Branch names may contain `/`; the directory is the branch name with each `/`
+replaced by `-`, since worktrees do not nest. That makes `feature/x` and
+`feature-x` compete for one directory — whichever exists first keeps it, and
+`add` refuses the other by name rather than inventing a variant. If the target
+directory already exists for any other reason, `add` fails rather than inventing
+a new name. If the branch already exists, `base` is ignored with a warning.
 
 ### `git trees track [path] [--no-push]`
 
@@ -163,19 +165,15 @@ One entry per branch with upstream, ahead/behind, last commit date, clean/dirty,
 and path (relative to the project root). Includes branches with no worktree,
 shown with path `(none)`. `--json` emits the same fields as an array.
 
-### `git trees clean [--older-than N] [--merged|--gone] [--apply]`
+## Removing worktrees
 
-Reports by default; `--apply` executes. Three passes:
+`git-trees` does not delete anything. Remove a worktree and its branch with git:
 
-- **gone** — branches whose upstream is deleted (`[gone]`)
-- **merged** — branches merged into the default branch, *excluding* those with
-  no commits of their own (a branch freshly cut from `main` is technically
-  merged but isn't finished work)
-- **older-than** — worktrees whose directory mtime exceeds N days
-
-`--gone` and `--merged` are mutually exclusive selectors; passing neither runs
-both. Uses `git branch -d` (safe) and tells you when to escalate to `-D`. Never
-removes the repo root or your current directory.
+```bash
+git worktree remove <path>
+git branch -d <branch>          # -d refuses unmerged work; escalate to -D yourself
+git worktree prune
+```
 
 ## Environment
 
@@ -202,10 +200,11 @@ trees() {
 
 ## Known limitations
 
-- `--older-than` uses directory mtime, which build output touches. Last commit
-  date would be a truer measure of staleness.
+- Removing stale worktrees and branches is manual; nothing here deletes.
 - `list` spawns several processes per branch — fine for dozens, slow for hundreds.
 - `add` ignores `base` when the branch already exists rather than failing.
+- Branch names beginning with `-` are unsupported: `add` parses them as options
+  and reports `unknown option`. There is no `--` end-of-options marker.
 - Bash-only (uses process substitution); not POSIX sh.
 
 ## Prior art
