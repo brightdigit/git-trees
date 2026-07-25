@@ -28,8 +28,10 @@ pass()    { printf '  ok    %s\n' "$1"; }
 fail()    { printf '  FAIL  %s\n' "$1" >&2; FAILED=1; }
 
 # `env -C` is GNU-only; macOS env has no such flag. Use a subshell instead.
-# Called indirectly, as the command argument to the assert_* helpers.
-# shellcheck disable=SC2329
+# Called indirectly, as the command argument to the assert_* helpers — hence the
+# suppressions. ShellCheck 0.9 reports that as SC2317 and 0.11 as SC2329, and CI
+# runs whichever the runner image ships, so both codes are listed.
+# shellcheck disable=SC2317,SC2329
 in_dir() { local d="$1"; shift; ( cd "$d" && "$@" ); }
 
 assert_eq() {   # assert_eq <label> <got> <want>
