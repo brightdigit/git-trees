@@ -63,14 +63,13 @@ credentials.
   upstream — but it means a local-feeling command can fire CI and publish a
   branch name. Pass `--no-push`, or set `TREES_NO_PUSH`, to opt out: the upstream
   is left unset and the command to run is printed. ([#25])
-- **`clean` is not in this release.** It was the only destructive subcommand,
-  the only one carrying open correctness bugs, and its `--apply` path had never
-  run in CI, so it was pulled rather than shipped half-tested. Remove worktrees
-  by hand with `git worktree remove` + `git branch -d` + `git worktree prune`.
-  It returns once it is fully tested and its removal step can be routed to a
-  trash can instead of being unrecoverable. ([#17], tracked in [#34])
-- **Branch names may not contain `/`**, since the worktree directory is the
-  branch name. Use `feature-x`, not `feature/x`.
+- **Nothing here deletes.** No subcommand removes a worktree or a branch. Do it
+  with git: `git worktree remove` + `git branch -d` + `git worktree prune`.
+- **A branch's `/` becomes `-` in its directory name**, because worktrees are
+  direct children of the container root and cannot nest. `feature/x` checks out
+  into `feature-x/` and keeps its real name. That means `feature/x` and
+  `feature-x` compete for one directory; whichever exists first keeps it, and
+  `add` refuses the other by name.
 - **`add` cannot `cd` your shell** — a git subcommand is a separate process. Use
   `--print-path` with the `trees()` wrapper in the README.
 
@@ -128,7 +127,7 @@ instead of hanging the runner. ([#27])
 
 - No `version` subcommand, so an installed script cannot report which release it
   is. Pin the curl URL to a tag if you need to know. ([#28])
-- No `clean`: removing stale worktrees and branches is manual. ([#34])
+- Removing stale worktrees and branches is manual; nothing here deletes.
 - `list` spawns several processes per branch — fine for dozens, slow for
   hundreds.
 - `add` ignores `base` when the branch already exists, rather than failing.
@@ -137,7 +136,6 @@ instead of hanging the runner. ([#27])
 
 [Unreleased]: https://github.com/brightdigit/git-trees/compare/v1.0.0...HEAD
 [1.0.0]: https://github.com/brightdigit/git-trees/releases/tag/v1.0.0
-[#17]: https://github.com/brightdigit/git-trees/issues/17
 [#18]: https://github.com/brightdigit/git-trees/issues/18
 [#20]: https://github.com/brightdigit/git-trees/issues/20
 [#22]: https://github.com/brightdigit/git-trees/issues/22
@@ -151,4 +149,3 @@ instead of hanging the runner. ([#27])
 [#31]: https://github.com/brightdigit/git-trees/issues/31
 [#32]: https://github.com/brightdigit/git-trees/issues/32
 [#33]: https://github.com/brightdigit/git-trees/issues/33
-[#34]: https://github.com/brightdigit/git-trees/issues/34
