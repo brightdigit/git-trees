@@ -19,8 +19,10 @@ indexes, and HEADs.
 
 1. Stay inside your assigned worktree. Do not `cd` into a sibling worktree or
    above the repo root.
-2. Do not `git checkout` a different branch. To work on another branch, request a
-   new worktree.
+2. Do not `git checkout` a different branch. To work on another branch, create
+   its worktree with `git trees add <name>` from the repo root — that gives it
+   its own directory and leaves yours untouched. If you cannot run that, request
+   the worktree instead.
 3. Never touch `trees-bare.git/`.
 4. Push with `git push -u origin HEAD` — upstream tracking may not be set.
 5. Other agents may be working in sibling worktrees concurrently. Do not `git gc`,

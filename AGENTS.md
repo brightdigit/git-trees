@@ -20,6 +20,13 @@ leaving both.
 bare-repo + worktrees layout. Read `README.md` first for behavior; this file
 covers constraints on changing it.
 
+**This file is contributor guidance for `git-trees` itself** (`CLAUDE.md` is a
+symlink to it). Do not confuse it with `AGENTS.md.template`, which is a
+*product artifact*: `install.sh` copies it to `~/.config/git-trees/AGENTS.md`,
+and `init` seeds it into the root of containers built with this tool, for an
+entirely different audience. Nothing project-specific to this repo belongs in
+the template.
+
 ## Constraints
 
 **Single file.** `git-trees` must stay one self-contained script installable by
