@@ -121,16 +121,19 @@ cd git-trees && ./install.sh              # → ~/.local/bin
 
 ```bash
 curl -o ~/.local/bin/git-trees \
-  https://raw.githubusercontent.com/brightdigit/git-trees/main/git-trees
+  https://raw.githubusercontent.com/brightdigit/git-trees/v1.0.0/git-trees
 chmod +x ~/.local/bin/git-trees
 ```
 
-Two things to know about this path. It does **not** create
+One thing to know about this path: it does **not** create
 `~/.config/git-trees/AGENTS.md`, so the documented default for
 `TREES_AGENTS_TEMPLATE` points at a file you don't have — seeding is simply
-skipped, which is harmless, but `init` will not write an `AGENTS.md`. And it
-tracks `main`, which moves: what you get today is not necessarily what you got
-last week. Use the installer if you want a known state.
+skipped, which is harmless, but `init` will not write an `AGENTS.md`. Use the
+installer if you want the template too.
+
+The URL above is pinned to the `v1.0.0` tag, so it gives the same script every
+time. Swapping `v1.0.0` for `main` tracks the development branch instead — a
+moving target, and not what you want for an install you intend to keep.
 
 Either way, make sure the destination is on your `PATH`:
 
