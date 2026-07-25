@@ -91,6 +91,34 @@ jobs:
             echo "FAIL: fresh branch listed as merged"; exit 1
           fi
 
+          # --- #25: --no-push must not create the branch on origin ---
+          # Remote branch absent: nothing pushed, upstream unset, exit 0.
+          bash "$T" add nopush --no-push 2>/tmp/nopush-err
+          if git ls-remote --exit-code --heads origin nopush >/dev/null 2>&1; then
+            echo "FAIL: --no-push created origin/nopush"; exit 1
+          fi
+          if git -C nopush rev-parse --abbrev-ref '@{upstream}' >/dev/null 2>&1; then
+            echo "FAIL: --no-push set an upstream"; exit 1
+          fi
+          grep -q 'git push -u origin HEAD' /tmp/nopush-err || {
+            echo "FAIL: --no-push did not print the push command"; cat /tmp/nopush-err; exit 1
+          }
+
+          # Remote branch present: --no-push must still set the upstream.
+          git push -q origin feature-x:nopush-existing
+          git fetch -q origin
+          bash "$T" add nopush-existing --no-push >/dev/null 2>&1
+          up=$(git -C nopush-existing rev-parse --abbrev-ref '@{upstream}')
+          [ "$up" = "origin/nopush-existing" ] || {
+            echo "FAIL: --no-push upstream was $up"; exit 1
+          }
+
+          # TREES_NO_PUSH does the same without the flag.
+          TREES_NO_PUSH=1 bash "$T" add envnopush >/dev/null 2>&1
+          if git ls-remote --exit-code --heads origin envnopush >/dev/null 2>&1; then
+            echo "FAIL: TREES_NO_PUSH created origin/envnopush"; exit 1
+          fi
+
           # Outside a repo → nonzero exit
           outside=$(mktemp -d)
           if (cd "$outside" && bash "$T" list) >/dev/null 2>&1; then
