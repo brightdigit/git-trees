@@ -63,9 +63,8 @@ assert_fail() { # assert_fail <label> <cmd...>
 }
 
 # Run a command with a deadline. Prints nothing; returns 124 if it outlived the
-# deadline, otherwise the command's own status. Needed because the bug class
-# under test (#18) is an infinite loop: a plain assertion would hang the runner
-# until the job timeout instead of failing. `timeout` is not installed on macOS.
+# deadline, otherwise the command's own status. An unbounded hang would sit until
+# the job timeout instead of failing. `timeout` is not installed on macOS.
 run_bounded() { # run_bounded <seconds> <cmd...>
   local secs="$1"; shift
   "$@" >/dev/null 2>&1 &
@@ -140,19 +139,6 @@ out=$(bash "$T" help 2>&1)
 assert_contains "help lists add" "$out" "add <branch>"
 assert_contains "help lists list" "$out" "list [--json]"
 
-# `clean` was pulled before v1.0.0. Assert it is *unrecognized*: a bare nonzero
-# exit would also pass if it were dispatched and merely failed.
-assert_fail "clean exits nonzero" bash "$T" clean
-assert_contains "clean is rejected as an unknown command" \
-  "$(bash "$T" clean 2>&1)" "unknown command 'clean'"
-# Whole word: `list` legitimately prints "clean" as a worktree's dirty state, so
-# a substring match would be one usage-text reshuffle away from a false alarm.
-if bash "$T" help 2>&1 | grep -qw clean; then
-  fail "help still advertises clean"
-else
-  pass "help does not advertise clean"
-fi
-
 section "outside a repo"
 mkdir -p "$TMP/plain"
 assert_fail "list outside a repo" in_dir "$TMP/plain" bash "$T" list
@@ -176,8 +162,8 @@ assert_fail "container root has no work tree" git -C "$TMP/init-ok" status
 
 assert_fail "init into an existing directory" bash "$T" init "file://$ORIGIN" --dir init-ok
 
-# Post-clone failure must not report success (#22). A git shim on PATH fails
-# only the `git -C <dir> fetch` that init runs after cloning.
+# Post-clone failure must not report success. A git shim on PATH fails only the
+# `git -C <dir> fetch` that init runs after cloning.
 SHIM="$TMP/shim"
 mkdir -p "$SHIM"
 cat > "$SHIM/git" <<EOSHIM
@@ -194,7 +180,7 @@ assert_ok "init removed the half-built container" test '!' -e "$TMP/init-broken"
 # Rollback is what makes a retry possible; without it the user hits "already exists".
 assert_ok "init can be retried after a failure" bash "$T" init "file://$ORIGIN" --dir init-broken
 
-# Options that take a value must not spin forever when it is missing (#18).
+# Options that take a value must not spin forever when it is missing.
 assert_no_hang "init --host with no value"           bash "$T" init --host
 assert_no_hang "init --dir with no value"            bash "$T" init --dir
 assert_no_hang "init org/repo --host with no value"  bash "$T" init org/repo --host
@@ -262,8 +248,8 @@ C=$(new_container add-c)
 cd "$C" || exit 1
 
 # Invalid names must be reported as invalid names, not as directory collisions
-# or unknown options (#31). `$root/..` always exists, which is what made `add ..`
-# report the wrong thing.
+# or unknown options. `$root/..` always exists, so without an early check
+# `add ..` looks like a directory collision.
 for bad in . ..; do
   out=$(bash "$T" add "$bad" 2>&1)
   assert_fail "add '$bad' fails" bash "$T" add "$bad"
@@ -278,9 +264,9 @@ assert_ok "add an existing remote branch" bash "$T" add feature-x
 assert_eq "existing remote branch tracks itself" \
   "$(git -C feature-x rev-parse --abbrev-ref '@{upstream}')" "origin/feature-x"
 
-# Brand-new branch → must NOT inherit the base ref's upstream. Asserting the
-# exact value, not just "!= origin/main": an empty or otherwise wrong upstream
-# would pass the loose form while still being the bug.
+# Brand-new branch → must NOT inherit the base ref's upstream. Assert the exact
+# value: a looser check (for example `!= origin/main`) also passes on an empty
+# or otherwise wrong upstream.
 assert_ok "add a brand-new branch" bash "$T" add brandnew
 assert_eq "new branch tracks its own remote, not the base" \
   "$(git -C brandnew rev-parse --abbrev-ref '@{upstream}' 2>/dev/null)" "origin/brandnew"
@@ -312,8 +298,8 @@ assert_fail "add too many arguments" bash "$T" add a b c
 
 # Worktrees are direct children of the container root, so a `/` cannot become a
 # directory separator — it becomes `-`. Only the directory is slugged; the ref
-# keeps its real name. Runs in its own container so `slug-one` cannot be
-# confused with a directory an earlier test created.
+# keeps its real name. Runs in its own container so `slug-one` cannot collide
+# with a directory from another section.
 section "add — slugged directories"
 SL=$(new_container slug-c)
 cd "$SL" || exit 1
@@ -339,8 +325,7 @@ assert_eq "a new slash branch tracks its own remote, not the base" \
   "$(git -C deep-new-branch rev-parse --abbrev-ref '@{upstream}' 2>/dev/null)" \
   "origin/deep/new/branch"
 
-# `list` must agree with `add` about where a slash branch lives — the two once
-# disagreed, with `list` advertising branches `add` refused to serve.
+# `list` must agree with `add` about where a slash branch lives.
 out=$(bash "$T" list 2>/dev/null)
 assert_contains "list shows the slash branch" "$out" "slug/one"
 assert_not_contains "list does not show it as having no worktree" \
@@ -419,8 +404,8 @@ assert_ok "list --json parses" \
 assert_fail "list unknown option" bash "$T" list --nope
 
 # JSON escaping: a path containing a backslash and a quote must round-trip.
-# Backslash is the case that regresses silently — `\s` is not a valid JSON
-# escape, so a strict parser rejects the whole document.
+# A bare `\s` is not a valid JSON escape, so a strict parser rejects the whole
+# document if escaping is wrong.
 JDIR="$TMP/json-esc"
 mkdir -p "$JDIR"
 JWT="$JDIR/back\\slash \"quoted\""

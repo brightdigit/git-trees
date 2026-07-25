@@ -33,8 +33,7 @@ the template.
 copying it onto `PATH`. Do not split into sourced libraries.
 
 **Pure git.** No `gh`, `glab`, `jq`, or other external CLIs. `git`, coreutils,
-and `awk` only. An earlier `pr` subcommand was removed specifically to
-keep this property — do not reintroduce forge integration.
+and `awk` only. Do not add forge integration.
 
 **Cannot cd the shell.** A git subcommand is a separate process. Any feature
 needing to change the user's directory must instead print a path on stdout and
@@ -50,11 +49,9 @@ the directory (`_branch_at`). Do not "fix" that by inventing a suffixed variant:
 a directory whose name the user cannot predict is worse than an error.
 
 **Nothing destructive.** No subcommand removes a worktree or deletes a branch.
-`clean` did, and was pulled before v1.0.0 ([#34](https://github.com/brightdigit/git-trees/issues/34)).
 Anything that destroys user data must report by default and act only under an
 explicit `--apply`, must use `git branch -d` and never `-D`, and must route
-directory removal through a user-configurable command — see #34 for the full
-contract before adding one.
+directory removal through a user-configurable command.
 
 **`track` only ever sets `origin/<branch>`.** Same remote, same name. There is
 no flag for an arbitrary upstream, and `origin` is hardcoded throughout —
@@ -64,23 +61,12 @@ early once *any* upstream is set, so it will not fight them. If this ever grows 
 `--upstream <ref>` flag, `cmd_add` must pass it through — `add` calls `cmd_track`
 unconditionally, and would otherwise overwrite what the user asked for.
 
-## Two bugs that were found by testing — don't regress them
+## Git pitfall: new worktrees inherit upstream
 
-1. **`git worktree add -b <new> <base>` inherits the base ref's upstream.** A
-   branch created from `origin/main` silently gets `origin/main` as its upstream
-   and will push there. The new-branch path must pass `--no-track`, then let
-   `cmd_track` set the correct upstream. Live in `cmd_add`; any change there
-   needs a fresh test.
-
-2. **`git branch --merged` flags branches with no commits of their own.** A
-   branch just cut from `main` is reachable-from-`main` and looks merged. Any
-   merged-branch pass must skip branches where
-   `git rev-list --count origin/<def>..<br>` is 0. No code relies on this today —
-   the `clean` command that did was removed — but the note stays, because losing
-   it is how the bug comes back when `clean` returns (#34).
-
-Both are counterintuitive and both were caught only by running against a real
-repo.
+`git worktree add -b <new> <base>` inherits the base ref's upstream. A branch
+created from `origin/main` silently gets `origin/main` as its upstream and will
+push there. The new-branch path must pass `--no-track`, then let `cmd_track` set
+the correct upstream. Live in `cmd_add`; any change there needs a fresh test.
 
 ## Testing
 
@@ -103,8 +89,7 @@ constraint above governs `git-trees`; it does not forbid a test script.
 
 What the suite covers:
 
-- **help/dispatch** — `help`, `--help`, unknown command, and that the removed
-  `clean` is *unrecognized* rather than merely unsuccessful
+- **help/dispatch** — `help`, `--help`, and unknown command
 - **outside a repo** — `list` and `root` both exit nonzero
 - **init** — happy path over `file://`; the gitdir pointer, bare store, seeded
   `AGENTS.md`, and `origin/*` refs it must produce; the container root having no
@@ -130,20 +115,17 @@ What the suite covers:
   `--json` parsing, and a worktree whose path contains `\` and `"` round-tripping
   through `json.load`
 
-Bug-shaped assertions carry a comment saying which bug they pin. Two are worth
-knowing about:
+Two assertion shapes are easy to get wrong:
 
-- The missing-option-value checks are **bounded** (`run_bounded`). The
-  regression is an infinite loop, so a plain assertion would hang the runner
-  until the job timeout instead of failing. `timeout` is not installed on macOS,
-  hence the background-PID and `kill -0` dance.
-- `add brandnew` asserts the upstream is **exactly** `origin/brandnew`. The
-  older `!= origin/main` form also passed on an empty or otherwise wrong
-  upstream, which is the same bug wearing a different hat.
+- The missing-option-value checks are **bounded** (`run_bounded`). An unbounded
+  hang would sit until the job timeout instead of failing. `timeout` is not
+  installed on macOS, hence the background-PID and `kill -0` dance.
+- `add brandnew` asserts the upstream is **exactly** `origin/brandnew`. A looser
+  check (for example `!= origin/main`) also passes on an empty or otherwise wrong
+  upstream.
 
-ShellCheck is not a safety net here — it passes clean on code containing both
-the argument-parsing hang and the `_seed_agents` precedence bug. Linting is not
-coverage.
+ShellCheck is not a safety net here — it can pass clean on an argument-parsing
+hang or a wrong `_seed_agents` guard order. Linting is not coverage.
 
 Not covered: `init` against a real network host.
 
@@ -153,5 +135,4 @@ Not covered: `init` against a real network host.
   rely on nonzero exits
 - Functions prefixed `cmd_` are subcommands; `_`-prefixed are internal helpers
 - Every subcommand validates its own args and prints usage to stderr on failure
-- Comments explain *why*, particularly for the two bugs above — the `--no-track`
-  and `rev-list --count` lines look removable without them
+- Comments explain *why* — the `--no-track` line looks removable without one
