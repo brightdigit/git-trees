@@ -84,40 +84,68 @@ repo.
 
 ## Testing
 
-No test framework. Verify by building a throwaway repo pair:
+Run the suite:
 
 ```bash
-rm -rf /tmp/tt && mkdir -p /tmp/tt/origin && cd /tmp/tt/origin
-git init -q -b main . && git config user.email t@t && git config user.name t
-echo hi > a.txt && git add . && git commit -qm init
-git branch feature-x
-
-cd /tmp/tt && git clone -q --bare /tmp/tt/origin proj/trees-bare.git
-echo "gitdir: ./trees-bare.git" > proj/.git
-cd proj
-git config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'
-git config user.email t@t && git config user.name t
-git fetch -q origin && git remote set-head origin --auto >/dev/null
+tests/smoke.sh              # tests ./git-trees
+tests/smoke.sh /path/to/git-trees
 ```
 
-Then exercise the paths. Things worth checking after any change:
+It builds its own fixtures under `mktemp -d` from `file://` remotes — no
+network, no `jq`, nothing written outside the temp directory — and runs every
+check to completion rather than stopping at the first failure. CI runs exactly
+this, on `ubuntu-latest` and `macos-latest`
+(`.github/workflows/ci.yml`), plus `bash -n` and
+`shellcheck -s bash git-trees install.sh tests/smoke.sh`.
 
-- `add feature/x` — creates `feature-x/`; the branch keeps its slash and its
-  upstream is `origin/feature/x`
-- `add feature-x` when `feature/x` already owns `feature-x/` — must fail, and the
-  error must name `feature/x`
-- `add feature-x` — remote branch exists; upstream must be `origin/feature-x`
-- `add brandnew` — no remote branch; upstream must be `origin/brandnew`, **not**
-  `origin/main`; failed track/push must exit nonzero
-- `add` into an existing directory — clear collision error, nonzero exit
-- `add x --print-path` — stdout must be *only* the path
-- `list --json` — valid JSON, includes branches with no worktree
-- `git trees` outside a repo — clean error, nonzero exit
+`tests/smoke.sh` is a test harness, not part of the tool. The single-file
+constraint above governs `git-trees`; it does not forbid a test script.
 
-Automated coverage lives in `.github/workflows/ci.yml` (ubuntu + macOS). Also run
-`bash -n git-trees` for syntax and `shellcheck git-trees` if available.
+What the suite covers:
 
-`init` needs network and is not covered by the above.
+- **help/dispatch** — `help`, `--help`, unknown command, and that the removed
+  `clean` is *unrecognized* rather than merely unsuccessful
+- **outside a repo** — `list` and `root` both exit nonzero
+- **init** — happy path over `file://`; the gitdir pointer, bare store, seeded
+  `AGENTS.md`, and `origin/*` refs it must produce; the container root having no
+  work tree; refusal on an existing directory; **rollback when the post-clone
+  fetch fails**, and that a retry then works; `--host`/`--dir` with a missing
+  value exiting promptly rather than hanging
+- **root** — printing the container, adopting a bare container by writing the
+  `.git` pointer under the store's own name, rejecting a plain directory
+- **root --agents** — seeds when absent; never overwrites a regular file; treats
+  a **broken symlink** as occupied; no-ops without a template; keeps stdout to
+  the path alone
+- **add** — `.`, `..` and `'has space'` reported as bad branch names rather than
+  directory collisions, and rejected before `Preparing worktree`; upstream
+  exactly `origin/feature-x` for an existing remote branch and exactly
+  `origin/brandnew` for a new one; directory collision; `--print-path` emitting
+  only a path; argument errors; nonzero exit when `track`/push fails
+- **add with a slash in the branch** — the directory is slugged (`feature/x` →
+  `feature-x/`, `deep/new/branch` → `deep-new-branch/`) while the ref keeps its
+  slash and tracks `origin/feature/x`; a second branch slugging to a taken
+  directory is refused with the owning branch named
+- **track** — idempotent on an already-tracked worktree; fails on a non-worktree
+- **list** — text output, branches with no worktree shown as `(none)`,
+  `--json` parsing, and a worktree whose path contains `\` and `"` round-tripping
+  through `json.load`
+
+Bug-shaped assertions carry a comment saying which bug they pin. Two are worth
+knowing about:
+
+- The missing-option-value checks are **bounded** (`run_bounded`). The
+  regression is an infinite loop, so a plain assertion would hang the runner
+  until the job timeout instead of failing. `timeout` is not installed on macOS,
+  hence the background-PID and `kill -0` dance.
+- `add brandnew` asserts the upstream is **exactly** `origin/brandnew`. The
+  older `!= origin/main` form also passed on an empty or otherwise wrong
+  upstream, which is the same bug wearing a different hat.
+
+ShellCheck is not a safety net here — it passes clean on code containing both
+the argument-parsing hang and the `_seed_agents` precedence bug. Linting is not
+coverage.
+
+Not covered: `init` against a real network host.
 
 ## Style
 
