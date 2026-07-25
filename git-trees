@@ -37,6 +37,21 @@ _path_for() {   # _path_for <branch> -> worktree path or empty
       '
 }
 
+# Worktree directory name for a branch. Every worktree is a direct child of the
+# container root, so a branch's `/` cannot become a directory separator — it
+# becomes `-`. The branch keeps its real name; only the directory is slugged.
+# Two branches can slug to the same name (feature/x and feature-x); `cmd_add`
+# refuses the second rather than guessing which one owns the directory.
+_slug() { printf '%s\n' "${1//\//-}"; }
+
+_branch_at() {  # _branch_at <path> -> branch checked out there, or empty
+  git worktree list --porcelain \
+    | awk -v w="$1" '
+        /^worktree /{p=$0; sub(/^worktree /, "", p)}
+        /^branch /{ if (p==w) { b=$0; sub(/^branch refs\/heads\//, "", b); print b } }
+      '
+}
+
 # Absolute path -> path relative to $1; unchanged if outside.
 _rel_to() {
   case "$2" in
@@ -291,7 +306,7 @@ cmd_root() {
 # --- add ---------------------------------------------------------------------
 
 cmd_add() {
-  local br="" base="" print_path=0 root path dir
+  local br="" base="" print_path=0 root path dir owner
 
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -309,10 +324,6 @@ cmd_add() {
   [ -z "$br" ] && { echo "usage: git trees add <branch> [base] [--print-path]" >&2; return 1; }
 
   case "$br" in
-    */*)
-      echo "git trees add: branch names must not contain '/'; use dashes (e.g. feature-x), not feature/x" >&2
-      return 1
-      ;;
     .|..)
       echo "git trees add: '$br' is a directory reference, not a branch name" >&2
       return 1
@@ -323,7 +334,9 @@ cmd_add() {
   # resolves to "$root/.." — which always exists — and fails with a directory
   # collision, and `add 'has space'` only fails after `worktree add` has already
   # printed "Preparing worktree…". Both report the wrong problem.
-  if ! git check-ref-format "refs/heads/$br"; then
+  # Silenced: this runs before the `--print-path` branch, so any output of its
+  # own would land on the caller's stdout.
+  if ! git check-ref-format "refs/heads/$br" >/dev/null 2>&1; then
     echo "git trees add: '$br' is not a valid branch name" >&2
     return 1
   fi
@@ -338,9 +351,17 @@ cmd_add() {
     return 0
   fi
 
-  dir="$root/$br"
+  dir="$root/$(_slug "$br")"
   if [ -e "$dir" ]; then
-    echo "git trees add: directory already exists: $dir" >&2
+    # `feature/x` and `feature-x` slug to the same directory. Name the branch
+    # that got there first, so the error says what to rename instead of leaving
+    # the user staring at a directory they never created.
+    owner=$(_branch_at "$dir")
+    if [ -n "$owner" ] && [ "$owner" != "$br" ]; then
+      echo "git trees add: '$br' and '$owner' both map to $dir — rename one" >&2
+    else
+      echo "git trees add: directory already exists: $dir" >&2
+    fi
     return 1
   fi
 

@@ -40,6 +40,7 @@ jobs:
           git init -q -b main .
           echo hi > a.txt && git add . && git commit -qm init
           git branch feature-x
+          git branch slug/one   # pre-existing slash branch, as a real repo has
 
           cd /tmp/tt && git clone -q --bare /tmp/tt/origin proj/trees-bare.git
           echo "gitdir: ./trees-bare.git" > proj/.git
@@ -53,16 +54,36 @@ jobs:
 
           bash "$T" help
 
-          if bash "$T" add feature/x 2>/tmp/slash-err; then
-            echo "FAIL: add should reject branch names containing /"; exit 1
-          fi
-          grep -q "must not contain '/'" /tmp/slash-err || {
-            echo "FAIL: missing slash-rejection message"; cat /tmp/slash-err; exit 1
-          }
-
           bash "$T" add feature-x
           up=$(git -C feature-x rev-parse --abbrev-ref '@{upstream}')
           [ "$up" = "origin/feature-x" ] || { echo "FAIL: upstream was $up"; exit 1; }
+
+          # A slash branch checks out into a slugged directory; the ref keeps
+          # its slash. Uses a name of its own so it cannot claim feature-x above.
+          bash "$T" add slug/one
+          [ -d slug-one ] || { echo "FAIL: slug/one did not create slug-one"; exit 1; }
+          b=$(git -C slug-one symbolic-ref --short HEAD)
+          [ "$b" = "slug/one" ] || { echo "FAIL: branch was $b, expected slug/one"; exit 1; }
+          up=$(git -C slug-one rev-parse --abbrev-ref '@{upstream}')
+          [ "$up" = "origin/slug/one" ] || { echo "FAIL: upstream was $up"; exit 1; }
+
+          # Two branches slugging to one directory: refuse, and name the owner.
+          if bash "$T" add slug-one 2>/tmp/slug-err; then
+            echo "FAIL: slug-one should collide with slug/one"; exit 1
+          fi
+          grep -q "slug/one" /tmp/slug-err || {
+            echo "FAIL: collision message did not name the owning branch"
+            cat /tmp/slug-err; exit 1
+          }
+
+          # New slash branch: every component slugged, and --no-track still
+          # applies so it does not inherit origin/main.
+          bash "$T" add deep/new/branch
+          [ -d deep-new-branch ] || { echo "FAIL: deep/new/branch did not slug"; exit 1; }
+          up=$(git -C deep-new-branch rev-parse --abbrev-ref '@{upstream}' 2>/dev/null || echo none)
+          [ "$up" = "origin/deep/new/branch" ] || {
+            echo "FAIL: new slash branch upstream was $up"; exit 1
+          }
 
           mkdir leftover-dir
           if bash "$T" add leftover-dir 2>/tmp/collide-err; then

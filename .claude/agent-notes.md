@@ -12,3 +12,4 @@ update or remove the stale line rather than leaving both.
 
 - Never merge pull requests unless the user explicitly asks to merge.
 - Do not change `AGENTS.md.template` for project-specific agent conventions; that file is for the installing developer.
+- Branch names with `/` are supported and slug to `-` in the directory name; do not restore the old outright rejection (supersedes closed issues #4 and #8).
