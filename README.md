@@ -112,7 +112,7 @@ containers that `init` did not create. Skipped if the file already exists or no
 template is configured; the notice goes to stderr, so the path on stdout stays
 clean for `$(git trees root)`.
 
-### `git trees add <branch> [base] [--print-path]`
+### `git trees add <branch> [base] [--print-path] [--no-push]`
 
 Creates a worktree, handling three cases:
 
@@ -122,9 +122,21 @@ Creates a worktree, handling three cases:
 | Branch exists on `origin` | Fetch, create with `--track` |
 | Branch is new | Create from `base` (default `origin/<default>`) with `--no-track` |
 
-Upstream is always set afterward via `track`; if that push/upstream setup fails,
-`add` exits nonzero (the worktree may still exist). `--print-path` writes the
-path to stdout and everything else to stderr, for shell wrappers.
+> **`add` writes to the remote.** Upstream is always set afterward via `track`.
+> If the branch does not exist on `origin`, that runs
+> `git push -u origin HEAD` — **which creates the branch on the remote.** This
+> is a reasonable default for parallel coding agents, which need an upstream to
+> push to, but it means a local-feeling command fires CI, sends notifications,
+> and publishes a branch name. Pass `--no-push` to skip it.
+
+With `--no-push`, `add` sets the upstream when `origin/<branch>` already exists
+and otherwise leaves it unset, printing the `git push -u origin HEAD` you can run
+yourself. It still exits 0. Set `TREES_NO_PUSH` to any non-empty value to get
+that behavior everywhere without passing the flag.
+
+If the push or upstream setup fails, `add` exits nonzero (the worktree may still
+exist). `--print-path` writes the path to stdout and everything else to stderr,
+for shell wrappers.
 
 Branch names may contain `/`; the directory is the branch name with each `/`
 replaced by `-`, since worktrees do not nest. That makes `feature/x` and
@@ -133,13 +145,19 @@ replaced by `-`, since worktrees do not nest. That makes `feature/x` and
 directory already exists for any other reason, `add` fails rather than inventing
 a new name. If the branch already exists, `base` is ignored with a warning.
 
-### `git trees track [path]`
+### `git trees track [path] [--no-push]`
 
 Idempotent. Ensures the branch in `path` (default `.`) has an upstream: sets it
-to `origin/<branch>` if that exists remotely, otherwise `push -u`. Returns
+to `origin/<branch>` if that exists remotely, otherwise runs
+`git push -u origin HEAD`, **which creates the branch on `origin`**. Returns
 immediately if an upstream is already configured.
 
-Useful for repairing worktrees created before this tool.
+`--no-push` (or a non-empty `TREES_NO_PUSH`) suppresses that push: the upstream
+is left unset and the exact command to run is printed to stderr. Exit status
+stays 0 — not setting an upstream is the requested outcome, not a failure.
+
+Useful for repairing worktrees created before this tool. Note that pushing needs
+forge credentials; without push rights, `track` fails unless you use `--no-push`.
 
 ### `git trees list [--json]` (alias `ls`)
 
@@ -164,6 +182,7 @@ git worktree prune
 | `TREES_HOST` | `github.com` | Host for `init` URLs |
 | `TREES_ORG` | *(unset)* | Default org; if unset, bare repo names are rejected |
 | `TREES_AGENTS_TEMPLATE` | `~/.config/git-trees/AGENTS.md` | Seeded at the container root by `init` (and `root --agents`) |
+| `TREES_NO_PUSH` | *(unset)* | Any non-empty value: `add`/`track` never create a branch on `origin` |
 
 ## Shell wrapper (optional)
 

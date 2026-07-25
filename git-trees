@@ -5,20 +5,22 @@
 #
 #   git trees init <org/repo|repo|url> [--host h] [--dir d]
 #   git trees root [dir] [--agents]    print project root; link .git if missing
-#   git trees add <branch> [base] [--print-path]
-#   git trees track [path]
+#   git trees add <branch> [base] [--print-path] [--no-push]
+#   git trees track [path] [--no-push]
 #   git trees list [--json]            (alias: ls)
 #
 # Env (all optional):
 #   TREES_HOST             default host for init (default: github.com)
 #   TREES_ORG              default org; if unset, bare repo names are rejected
 #   TREES_AGENTS_TEMPLATE  AGENTS.md seeded at the container root
+#   TREES_NO_PUSH          non-empty: never create a branch on origin
 
 set -uo pipefail
 
 : "${TREES_HOST:=}"
 : "${TREES_ORG:=}"
 : "${TREES_AGENTS_TEMPLATE:=$HOME/.config/git-trees/AGENTS.md}"
+: "${TREES_NO_PUSH:=}"
 
 # --- internals ---------------------------------------------------------------
 
@@ -305,11 +307,12 @@ cmd_root() {
 # --- add ---------------------------------------------------------------------
 
 cmd_add() {
-  local br="" base="" print_path=0 root path dir owner
+  local br="" base="" print_path=0 no_push=0 root path dir owner
 
   while [ $# -gt 0 ]; do
     case "$1" in
       --print-path) print_path=1; shift ;;
+      --no-push) no_push=1; shift ;;
       -*) echo "git trees add: unknown option $1" >&2; return 1 ;;
       *)
         if [ -z "$br" ]; then br="$1"
@@ -320,7 +323,10 @@ cmd_add() {
     esac
   done
 
-  [ -z "$br" ] && { echo "usage: git trees add <branch> [base] [--print-path]" >&2; return 1; }
+  [ -z "$br" ] && {
+    echo "usage: git trees add <branch> [base] [--print-path] [--no-push]" >&2
+    return 1
+  }
 
   case "$br" in
     .|..)
@@ -378,7 +384,11 @@ cmd_add() {
     git worktree add --no-track -b "$br" "$dir" "$base" >&2 || return 1
   fi
 
-  cmd_track "$dir" >&2 || return 1
+  if [ "$no_push" -eq 1 ]; then
+    cmd_track "$dir" --no-push >&2 || return 1
+  else
+    cmd_track "$dir" >&2 || return 1
+  fi
 
   if [ "$print_path" -eq 1 ]; then
     echo "$dir"
@@ -390,7 +400,26 @@ cmd_add() {
 # --- track -------------------------------------------------------------------
 
 cmd_track() {
-  local path="${1:-.}" br
+  local path="" no_push=0 br
+
+  # Global opt-out for setups (agent fleets, forks without push rights) that
+  # never want a branch created on the remote as a side effect.
+  if [ -n "$TREES_NO_PUSH" ]; then
+    no_push=1
+  fi
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --no-push) no_push=1; shift ;;
+      -*) echo "git trees track: unknown option $1" >&2; return 1 ;;
+      *)
+        if [ -z "$path" ]; then path="$1"; shift
+        else echo "git trees track: unexpected argument $1" >&2; return 1
+        fi ;;
+    esac
+  done
+  : "${path:=.}"
+
   br=$(git -C "$path" symbolic-ref --short HEAD 2>/dev/null) || {
     echo "git trees track: detached HEAD or not a worktree: $path" >&2
     return 1
@@ -403,7 +432,13 @@ cmd_track() {
   if git -C "$path" ls-remote --exit-code --heads origin "$br" >/dev/null 2>&1; then
     git -C "$path" fetch origin "$br" \
       && git -C "$path" branch --set-upstream-to="origin/$br" "$br"
+  elif [ "$no_push" -eq 1 ]; then
+    # Leaving the upstream unset is the point of --no-push, so this is success.
+    echo "git trees track: origin/$br does not exist — upstream not set (--no-push)" >&2
+    echo "  create it with:  cd \"$path\" && git push -u origin HEAD" >&2
+    return 0
   else
+    # Creates the branch on the remote. See --no-push / TREES_NO_PUSH.
     git -C "$path" push -u origin HEAD
   fi
 }
@@ -494,11 +529,17 @@ usage: git trees <command> [args]
 
   init <org/repo|repo|url> [--host h] [--dir d]   create bare repo + worktree layout
   root [dir] [--agents]                       print project root; link .git if missing
-  add <branch> [base] [--print-path]          create a worktree (sets upstream)
-  track [path]                                ensure branch has an upstream
+  add <branch> [base] [--print-path] [--no-push]
+                                              create a worktree (sets upstream)
+  track [path] [--no-push]                    ensure branch has an upstream
   list [--json]                               worktrees + branches without one
 
-env (optional): TREES_ORG, TREES_HOST, TREES_AGENTS_TEMPLATE — see README
+note: a branch that does not exist on origin is created there by `add`/`track`
+  via `git push -u origin HEAD`. Pass --no-push (or set TREES_NO_PUSH) to skip
+  that and leave the upstream unset.
+
+env (optional): TREES_ORG, TREES_HOST, TREES_AGENTS_TEMPLATE, TREES_NO_PUSH
+  — see README
 
 note: `add` prints the worktree path but cannot cd your shell. For that:
   trees() {
