@@ -145,20 +145,13 @@ shown with path `(none)`. `--json` emits the same fields as an array.
 
 ## Removing worktrees
 
-There is no `clean` subcommand in 1.0.0. Remove a worktree and its branch by
-hand:
+`git-trees` does not delete anything. Remove a worktree and its branch with git:
 
 ```bash
 git worktree remove <path>
 git branch -d <branch>          # -d refuses unmerged work; escalate to -D yourself
 git worktree prune
 ```
-
-A `clean` command shipped in pre-release versions and was pulled before 1.0.0 —
-it was the only destructive subcommand, it carried open correctness bugs, and its
-`--apply` path had never run in CI. It will return once it is fully tested and
-its removal step is routable to a trash can rather than being unrecoverable. See
-[the reintroduction issue](https://github.com/brightdigit/git-trees/issues/34).
 
 ## Environment
 
@@ -184,7 +177,7 @@ trees() {
 
 ## Known limitations
 
-- No `clean` subcommand — removing stale worktrees and branches is manual.
+- Removing stale worktrees and branches is manual; nothing here deletes.
 - `list` spawns several processes per branch — fine for dozens, slow for hundreds.
 - `add` ignores `base` when the branch already exists rather than failing.
 - Bash-only (uses process substitution); not POSIX sh.

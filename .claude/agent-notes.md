@@ -12,3 +12,4 @@ update or remove the stale line rather than leaving both.
 
 - Never merge pull requests unless the user explicitly asks to merge.
 - Do not change `AGENTS.md.template` for project-specific agent conventions; that file is for the installing developer.
+- User-facing docs (README, CHANGELOG) must not mention features that never shipped; 1.0.0 is the first release, so there is no prior version to reference. Rationale for removals belongs in AGENTS.md or the issue tracker.
