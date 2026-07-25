@@ -91,8 +91,12 @@ assert_no_hang() { # assert_no_hang <label> <cmd...>
 
 # --- fixtures ----------------------------------------------------------------
 
-git config --global user.email >/dev/null 2>&1 || git config --global user.email smoke@example.com
-git config --global user.name  >/dev/null 2>&1 || git config --global user.name  Smoke
+# Isolate from the developer's ~/.gitconfig. Identity via env is enough for
+# commits; GIT_CONFIG_GLOBAL keeps any incidental `git config --global` off disk
+# outside $TMP.
+export GIT_CONFIG_GLOBAL="$TMP/gitconfig"
+export GIT_AUTHOR_NAME=Smoke GIT_AUTHOR_EMAIL=smoke@example.com
+export GIT_COMMITTER_NAME=Smoke GIT_COMMITTER_EMAIL=smoke@example.com
 
 # An upstream with `main`, `feature-x`, and a pre-existing slash branch (as a
 # real repo has), served over file://.
@@ -358,7 +362,11 @@ NP=$(new_container nopush-c)
 cd "$NP" || exit 1
 
 out=$(bash "$T" add solo --no-push 2>&1)
-assert_ok "add --no-push exits 0" bash "$T" add solo2 --no-push
+assert_eq "add --no-push exits 0" "$?" "0"
+assert_ok "--no-push created the worktree" test -d solo
+assert_eq "--no-push checked out the branch" \
+  "$(git -C solo symbolic-ref --short HEAD 2>/dev/null)" "solo"
+assert_ok "add solo2 --no-push exits 0" bash "$T" add solo2 --no-push
 assert_fail "--no-push did not create the branch on origin" \
   git ls-remote --exit-code --heads origin solo
 assert_fail "--no-push left the upstream unset" \
