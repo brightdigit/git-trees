@@ -8,7 +8,6 @@
 #   git trees add <branch> [base] [--print-path]
 #   git trees track [path]
 #   git trees list [--json]            (alias: ls)
-#   git trees clean [--older-than N] [--merged|--gone] [--apply]
 #
 # Env (all optional):
 #   TREES_HOST             default host for init (default: github.com)
@@ -407,99 +406,6 @@ cmd_list() {
   fi
 }
 
-# --- clean -------------------------------------------------------------------
-
-cmd_clean() {
-  local days="" apply=0 do_gone=1 do_merged=1 do_stale=0 root def br p wt
-
-  while [ $# -gt 0 ]; do
-    case "$1" in
-      --older-than) days="${2:-}"; do_stale=1; shift 2 ;;
-      --gone)       do_gone=1; do_merged=0; shift ;;
-      --merged)     do_merged=1; do_gone=0; shift ;;
-      --apply)      apply=1; shift ;;
-      *) echo "git trees clean: unknown option $1" >&2; return 1 ;;
-    esac
-  done
-
-  root=$(_root) || { echo "git trees clean: not in a git repo" >&2; return 1; }
-  def=$(_default_branch)
-  git fetch --prune origin
-
-  if [ "$do_gone" -eq 1 ]; then
-    echo "== branches with gone upstream =="
-    while read -r br; do
-      [ -z "$br" ] && continue
-      p=$(_path_for "$br")
-      echo "  $br${p:+  ($p)}"
-      if [ "$apply" -eq 1 ]; then
-        if [ -n "$p" ]; then
-          if ! git worktree remove "$p"; then
-            echo "    ! worktree remove failed — skipped branch delete for $br" >&2
-            continue
-          fi
-        fi
-        git branch -d "$br" 2>/dev/null \
-          || echo "    ! unmerged — use: git branch -D $br"
-      fi
-    done < <(
-      git for-each-ref --format='%(refname:short) %(upstream:track)' refs/heads \
-        | grep '\[gone\]' | awk '{print $1}'
-    )
-  fi
-
-  if [ "$do_merged" -eq 1 ]; then
-    echo "== branches merged into $def =="
-    while read -r br; do
-      [ -z "$br" ] && continue
-      # Skip branches that have no commits of their own — a branch pointing at
-      # the base, or freshly created from it, is "merged" but not finished work.
-      [ "$(git rev-list --count "origin/$def..$br" 2>/dev/null)" = "0" ] && continue
-      p=$(_path_for "$br")
-      echo "  $br${p:+  ($p)}"
-      if [ "$apply" -eq 1 ]; then
-        if [ -n "$p" ]; then
-          if ! git worktree remove "$p"; then
-            echo "    ! worktree remove failed — skipped branch delete for $br" >&2
-            continue
-          fi
-        fi
-        git branch -d "$br" 2>/dev/null \
-          || echo "    ! unmerged — use: git branch -D $br"
-      fi
-    done < <(
-      git branch --merged "origin/$def" --format='%(refname:short)' 2>/dev/null \
-        | grep -vx "$def"
-    )
-  fi
-
-  if [ "$do_stale" -eq 1 ]; then
-    [ -z "$days" ] && { echo "git trees clean: --older-than needs a number of days" >&2; return 1; }
-    local common cwd_canon wt_canon
-    common=$(cd "$(git rev-parse --git-common-dir)" && pwd)
-    cwd_canon=$(cd "$PWD" && pwd -P)
-    echo "== worktrees untouched >${days}d =="
-    while read -r wt; do
-      [ "$wt" = "$root" ] && continue
-      [ "$wt" = "$common" ] && continue   # bare store (trees-bare.git), not a worktree
-      wt_canon=$(cd "$wt" && pwd -P) || continue
-      # Skip the worktree containing cwd (root or any subdirectory).
-      [ "$cwd_canon" = "$wt_canon" ] && continue
-      case "$cwd_canon" in
-        "$wt_canon"/*) continue ;;
-      esac
-      if [ -n "$(find "$wt" -maxdepth 0 -mtime +"$days" 2>/dev/null)" ]; then
-        echo "  $wt"
-        [ "$apply" -eq 1 ] && git worktree remove "$wt"
-      fi
-    done < <(git worktree list --porcelain | awk '/^worktree /{sub(/^worktree /, ""); print}')
-  fi
-
-  git worktree prune
-  [ "$apply" -eq 0 ] && echo "(report only — pass --apply to execute)"
-  return 0
-}
-
 # --- usage / dispatch --------------------------------------------------------
 
 usage() {
@@ -511,8 +417,6 @@ usage: git trees <command> [args]
   add <branch> [base] [--print-path]          create a worktree (sets upstream)
   track [path]                                ensure branch has an upstream
   list [--json]                               worktrees + branches without one
-  clean [--older-than N] [--merged|--gone] [--apply]
-                                              report/remove stale trees, branches
 
 env (optional): TREES_ORG, TREES_HOST, TREES_AGENTS_TEMPLATE — see README
 
@@ -536,7 +440,6 @@ main() {
     add)       cmd_add   "$@" ;;
     track)     cmd_track "$@" ;;
     list|ls)   cmd_list  "$@" ;;
-    clean)     cmd_clean "$@" ;;
     help|--help|-h) usage; return 0 ;;
     *) echo "git trees: unknown command '$cmd'" >&2; usage; return 1 ;;
   esac

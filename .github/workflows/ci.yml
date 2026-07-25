@@ -86,9 +86,12 @@ jobs:
           bash "$T" list
           bash "$T" list --json | python3 -c 'import json,sys; json.load(sys.stdin)'
 
-          git branch fresh origin/main
-          if bash "$T" clean 2>&1 | grep -A50 'merged into' | grep -q '  fresh$'; then
-            echo "FAIL: fresh branch listed as merged"; exit 1
+          # `clean` was removed before v1.0.0 (#17); it must not be dispatchable.
+          if bash "$T" clean >/dev/null 2>&1; then
+            echo "FAIL: clean should be an unknown command"; exit 1
+          fi
+          if bash "$T" help 2>&1 | grep -q clean; then
+            echo "FAIL: help still advertises clean"; exit 1
           fi
 
           # Outside a repo → nonzero exit
