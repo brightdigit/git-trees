@@ -14,5 +14,5 @@ update or remove the stale line rather than leaving both.
 - Do not change `AGENTS.md.template` for project-specific agent conventions; that file is for the installing developer.
 - Branch names with `/` are supported and slug to `-` in the directory name; do not reject slash branches.
 - User-facing docs (README, CHANGELOG) must not mention features that never shipped; 1.0.0 is the first release, so there is no prior version to reference.
-- CHANGELOG lists shipped features under `## What's Changed` without PR/issue URLs (history will be wiped at the v1.0.0 cut).
+- CHANGELOG follows GitHub release-notes format (`## What's Changed` + PR URLs), listing shipped features only — not Keep a Changelog / Unreleased / pre-1.0 fix archaeology. PR URLs remain even after the git history wipe.
 - Do not mention previous code, removed subcommands, or pre-v1.0 archaeology anywhere in the tree (docs, comments, tests). Forward-looking constraints and current git-behavior rationale are fine; unused merged-branch/`rev-list` guidance and a dedicated `clean` unknown-command test are not.
