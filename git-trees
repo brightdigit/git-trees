@@ -238,11 +238,7 @@ cmd_init() {
   # Optional: fails harmlessly against a remote with no HEAD.
   git -C "$dir" remote set-head origin --auto >/dev/null 2>&1
 
-  if ! _seed_agents "$dir"; then
-    echo "git trees init: could not seed AGENTS.md — removing $dir" >&2
-    rm -rf "$dir"
-    return 1
-  fi
+  _seed_agents "$dir" || return 1
 
   local def
   def=$(cd "$dir" && _default_branch)
