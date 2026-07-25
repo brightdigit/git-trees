@@ -3,13 +3,29 @@
 A `git` subcommand for managing a **bare repo + worktrees** layout. Pure git — no
 external CLI dependencies, no forge integration.
 
-```
-git trees init brightdigit/some-repo
+```bash
+git trees init brightdigit/some-repo   # creates the container
 cd some-repo
-git trees add feature-x
-git trees list
-git trees clean --older-than 30
+git trees add main                     # first worktree — your files live here
+cd main
 ```
+
+`init` creates the *container*: a shared object store plus a `.git` pointer, and
+nothing else. `add` creates a *working copy*. Between the two, the container root
+has no files checked out and `git status` there reports
+`fatal: this operation must be run in a work tree` — that is expected, not a
+broken install.
+
+From then on, one directory per branch:
+
+```bash
+git trees add feature-x   # sibling worktree, its own working copy
+git trees list            # every branch, with or without a worktree
+```
+
+`add` prints the new path but cannot `cd` your shell — it runs in its own
+process. The optional [`trees()` wrapper](#shell-wrapper-optional) below makes
+`trees add feature-x` drop you straight into it.
 
 ## Why
 
@@ -26,23 +42,82 @@ support, but the built-in porcelain leaves gaps:
 `git-trees` covers those. It's deliberately small and readable — one bash file
 you can audit in a sitting.
 
+## Concepts
+
+New to `git worktree`? Five terms cover everything below.
+
+- **Worktree** — a checked-out working copy: files on disk, its own index and
+  its own `HEAD`. Plain git gives you one per clone; `git worktree` lets one repo
+  have several, each on a different branch, all editable at once.
+- **Bare store** (`trees-bare.git/`) — the repository's objects and refs with no
+  working copy attached. Every worktree shares this one store, which is why
+  adding a tenth worktree costs a checkout, not a tenth copy of your history.
+  Never modify it directly.
+- **Container** — the directory holding the bare store and all the worktrees. It
+  is the thing `init` creates and what `git trees root` prints. It is *not*
+  itself a checkout.
+- **Gitdir pointer** (`.git`) — a one-line file reading
+  `gitdir: ./trees-bare.git`. Without it, plain `git` commands run from the
+  container root would walk up and find some unrelated parent repo, or nothing.
+  With it, `git fetch` and friends work from the root even though no files are
+  checked out there.
+- **Upstream** — the remote branch a local branch pushes to and compares
+  against (`origin/feature-x`). Setting it correctly on new branches is most of
+  what this tool does — see the `git trees add` section under **Commands**.
+
+`git-trees` is a thin layer that keeps this layout consistent. Everything it
+does, you could do with `git worktree` by hand.
+
 ## Layout
 
-`git trees init` produces:
+`init` and `add` produce different things — the container first, working copies
+after:
 
 ```
-<repo>/
-├── trees-bare.git/  bare git repo — never modified directly
-├── .git             file containing "gitdir: ./trees-bare.git"
-├── AGENTS.md        seeded from template, if configured — root only
-└── <branch-name>/   one worktree per branch
+After `git trees init`:            After `git trees add feature-x`:
+
+some-repo/                         some-repo/
+├── trees-bare.git/                ├── trees-bare.git/
+├── .git                           ├── .git
+└── AGENTS.md                      ├── AGENTS.md
+                                   └── feature-x/     ← your working copy
+   no files checked out yet
 ```
+
+- `trees-bare.git/` — the bare store; never modified directly
+- `.git` — a file containing `gitdir: ./trees-bare.git`
+- `AGENTS.md` — seeded from a template if one is configured; container root only
+- `feature-x/` — one directory per branch, created by `add`, never by `init`
 
 Worktrees share a single object store but have independent working trees,
 indexes, and HEADs. The worktree directory matches the branch name, so branch
 names must not contain `/` — use dashes (`feature-x`, not `feature/x`).
 
+## Prerequisites
+
+- **Git.**
+- **Bash** — not POSIX `sh`; the script uses process substitution. macOS's
+  built-in `/bin/bash` 3.2 is fine, as long as that is what `env bash` resolves
+  to. No Homebrew bash needed.
+- **Network access** for `init` against a remote host, and **forge credentials**
+  for the clone. `add` and `track` also push by default, which needs push
+  rights — see the `git trees add` section under **Commands**.
+- Optionally, an **agents template** at `~/.config/git-trees/AGENTS.md`, which
+  `./install.sh` puts there for you.
+
 ## Install
+
+**Recommended — clone and run the installer.** This is the full install: it
+places the script *and* seeds the agents template that
+`TREES_AGENTS_TEMPLATE` defaults to.
+
+```bash
+git clone https://github.com/brightdigit/git-trees.git
+cd git-trees && ./install.sh              # → ~/.local/bin
+./install.sh /usr/local/bin               # or anywhere else
+```
+
+**Convenience — one-line curl.** Fetches only the script:
 
 ```bash
 curl -o ~/.local/bin/git-trees \
@@ -50,14 +125,33 @@ curl -o ~/.local/bin/git-trees \
 chmod +x ~/.local/bin/git-trees
 ```
 
-Or clone and run the installer (also seeds `~/.config/git-trees/AGENTS.md`):
+Two things to know about this path. It does **not** create
+`~/.config/git-trees/AGENTS.md`, so the documented default for
+`TREES_AGENTS_TEMPLATE` points at a file you don't have — seeding is simply
+skipped, which is harmless, but `init` will not write an `AGENTS.md`. And it
+tracks `main`, which moves: what you get today is not necessarily what you got
+last week. Use the installer if you want a known state.
+
+Either way, make sure the destination is on your `PATH`:
 
 ```bash
-git clone https://github.com/brightdigit/git-trees.git
-cd git-trees && ./install.sh
+case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *)
+  echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc ;; esac
 ```
 
-Anything on `PATH` named `git-trees` becomes `git trees`. Requires bash 4+.
+`install.sh` warns if it isn't; the curl path cannot. Anything on `PATH` named
+`git-trees` becomes `git trees`.
+
+### Uninstall
+
+```bash
+./install.sh --uninstall              # clears ~/.local/bin and /usr/local/bin
+./install.sh --uninstall /opt/bin     # or the prefix you installed to
+```
+
+Pass the same directory you installed to — without it, a custom-prefix install is
+left behind. Uninstall does **not** remove `~/.config/git-trees/AGENTS.md`; it
+says so, and you can delete it yourself.
 
 ## Configuration
 
