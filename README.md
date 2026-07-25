@@ -37,8 +37,9 @@ you can audit in a sitting.
 ```
 
 Worktrees share a single object store but have independent working trees,
-indexes, and HEADs. The worktree directory matches the branch name, so branch
-names must not contain `/` — use dashes (`feature-x`, not `feature/x`).
+indexes, and HEADs. Every worktree is a direct child of the container root, so a
+branch's `/` becomes a `-` in the directory name: `feature/x` checks out into
+`feature-x/` while the branch keeps its real name.
 
 ## Install
 
@@ -125,9 +126,12 @@ Upstream is always set afterward via `track`; if that push/upstream setup fails,
 `add` exits nonzero (the worktree may still exist). `--print-path` writes the
 path to stdout and everything else to stderr, for shell wrappers.
 
-Branch names must not contain `/` (rejected with a clear error). If the target
-directory already exists, `add` fails rather than inventing a new name. If the
-branch already exists, `base` is ignored with a warning.
+Branch names may contain `/`; the directory is the branch name with each `/`
+replaced by `-`, since worktrees do not nest. That makes `feature/x` and
+`feature-x` compete for one directory — whichever exists first keeps it, and
+`add` refuses the other by name rather than inventing a variant. If the target
+directory already exists for any other reason, `add` fails rather than inventing
+a new name. If the branch already exists, `base` is ignored with a warning.
 
 ### `git trees track [path]`
 
@@ -180,6 +184,8 @@ trees() {
 - Removing stale worktrees and branches is manual; nothing here deletes.
 - `list` spawns several processes per branch — fine for dozens, slow for hundreds.
 - `add` ignores `base` when the branch already exists rather than failing.
+- Branch names beginning with `-` are unsupported: `add` parses them as options
+  and reports `unknown option`. There is no `--` end-of-options marker.
 - Bash-only (uses process substitution); not POSIX sh.
 
 ## Prior art

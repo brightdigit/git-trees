@@ -34,6 +34,14 @@ needing to change the user's directory must instead print a path on stdout and
 be wrapped by the optional shell function in the README. `--print-path` on `add`
 is the established pattern: path to stdout, all other output to stderr.
 
+**Worktrees do not nest.** Every worktree is a direct child of the container
+root, so the directory name is the branch name with each `/` replaced by `-`
+(`_slug`). The branch itself is never renamed — only the directory. The
+consequence is that `feature/x` and `feature-x` compete for one directory;
+`cmd_add` resolves this by refusing the second and naming the branch that owns
+the directory (`_branch_at`). Do not "fix" that by inventing a suffixed variant:
+a directory whose name the user cannot predict is worse than an error.
+
 **Nothing destructive.** No subcommand removes a worktree or deletes a branch.
 `clean` did, and was pulled before v1.0.0 ([#34](https://github.com/brightdigit/git-trees/issues/34)).
 Anything that destroys user data must report by default and act only under an
@@ -79,7 +87,10 @@ git fetch -q origin && git remote set-head origin --auto >/dev/null
 
 Then exercise the paths. Things worth checking after any change:
 
-- `add feature/x` — must fail (no `/` in branch names)
+- `add feature/x` — creates `feature-x/`; the branch keeps its slash and its
+  upstream is `origin/feature/x`
+- `add feature-x` when `feature/x` already owns `feature-x/` — must fail, and the
+  error must name `feature/x`
 - `add feature-x` — remote branch exists; upstream must be `origin/feature-x`
 - `add brandnew` — no remote branch; upstream must be `origin/brandnew`, **not**
   `origin/main`; failed track/push must exit nonzero
