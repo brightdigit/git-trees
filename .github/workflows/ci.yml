@@ -98,4 +98,49 @@ jobs:
           fi
           rmdir "$outside"
 
+          # --- #18: an option missing its value must fail, not spin forever ---
+          # Bounded, because a regression hangs the runner until the job timeout.
+          for opt in --host --dir; do
+            bash "$T" init "$opt" >/dev/null 2>&1 &
+            pid=$!
+            hung=1
+            for _ in 1 2 3 4 5 6; do
+              if ! kill -0 $pid 2>/dev/null; then hung=0; break; fi
+              sleep 0.5
+            done
+            if [ "$hung" -eq 1 ]; then
+              kill -9 $pid 2>/dev/null || true
+              echo "FAIL: 'init $opt' with no value hung"; exit 1
+            fi
+            if wait $pid; then
+              echo "FAIL: 'init $opt' with no value should exit nonzero"; exit 1
+            fi
+          done
+
+          # --- #31: invalid branch names report the branch, not a collision ---
+          for bad in . ..; do
+            if bash "$T" add "$bad" 2>/tmp/badname-err; then
+              echo "FAIL: add '$bad' should fail"; exit 1
+            fi
+            if grep -q "directory already exists" /tmp/badname-err; then
+              echo "FAIL: add '$bad' reported a directory collision"; cat /tmp/badname-err; exit 1
+            fi
+          done
+          if bash "$T" add 'has space' 2>/tmp/space-err; then
+            echo "FAIL: add 'has space' should fail"; exit 1
+          fi
+          # Must be rejected before git starts building the worktree.
+          if grep -q 'Preparing worktree' /tmp/space-err; then
+            echo "FAIL: 'has space' rejected only after worktree add ran"; cat /tmp/space-err; exit 1
+          fi
+
+          # --- #23: --json must escape backslashes, not just quotes ---
+          jf=$(mktemp -d)/'back\slash "quoted"'
+          git worktree add -b jsonesc "$jf" origin/main >/dev/null 2>&1
+          bash "$T" list --json | python3 -c 'import json,sys; json.load(sys.stdin)' || {
+            echo "FAIL: list --json invalid with a backslash in a path"; exit 1
+          }
+          git worktree remove --force "$jf"
+          git branch -D jsonesc >/dev/null
+
           echo "smoke tests passed"

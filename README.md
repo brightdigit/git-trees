@@ -187,6 +187,8 @@ trees() {
   date would be a truer measure of staleness.
 - `list` spawns several processes per branch — fine for dozens, slow for hundreds.
 - `add` ignores `base` when the branch already exists rather than failing.
+- Branch names beginning with `-` are unsupported: `add` parses them as options
+  and reports `unknown option`. There is no `--` end-of-options marker.
 - Bash-only (uses process substitution); not POSIX sh.
 
 ## Prior art

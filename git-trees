@@ -111,16 +111,27 @@ _ensure_git_pointer() {
 # every `git status` and invites being committed to the branch.
 # No-op when unconfigured or already present. Notice goes to stderr: callers
 # print paths on stdout.
+# `A || B && return` groups as `{ A || B; } && return`, so the compound status is
+# 1 when neither test holds — an inverted error path waiting to happen. Both
+# guards are written out.
 _seed_agents() {
   [ -f "$TREES_AGENTS_TEMPLATE" ] || return 0
   # Any existing path (including a broken symlink) is occupied — never overwrite.
-  [ -e "$1/AGENTS.md" ] || [ -L "$1/AGENTS.md" ] && return 0
+  # -e is false for a broken symlink; -L is true. Both tests are needed.
+  if [ -e "$1/AGENTS.md" ] || [ -L "$1/AGENTS.md" ]; then
+    return 0
+  fi
   # noclobber create: refuses to replace a file that appears between check and write.
   if (set -C; cat -- "$TREES_AGENTS_TEMPLATE" > "$1/AGENTS.md"); then
     echo "wrote $1/AGENTS.md" >&2
     return 0
   fi
-  [ -e "$1/AGENTS.md" ] || [ -L "$1/AGENTS.md" ] && return 0
+  # The write failed. Benign if another process won the race and created it;
+  # a real failure (read error, full disk) otherwise.
+  if [ -e "$1/AGENTS.md" ] || [ -L "$1/AGENTS.md" ]; then
+    return 0
+  fi
+  echo "git trees: could not write $1/AGENTS.md" >&2
   return 1
 }
 
@@ -140,8 +151,14 @@ cmd_init() {
   local host="" arg="" dir="" repo url="" host_set=0
   while [ $# -gt 0 ]; do
     case "$1" in
-      --host) host="${2:-}"; host_set=1; shift 2 ;;
-      --dir)  dir="${2:-}";  shift 2 ;;
+      # `shift 2` with one argument left fails and leaves $1 in place, so the
+      # while loop spins forever. Check arity before shifting.
+      --host)
+        [ $# -ge 2 ] || { echo "git trees init: --host needs a value" >&2; return 1; }
+        host="$2"; host_set=1; shift 2 ;;
+      --dir)
+        [ $# -ge 2 ] || { echo "git trees init: --dir needs a value" >&2; return 1; }
+        dir="$2"; shift 2 ;;
       -*)     echo "git trees init: unknown option $1" >&2; return 1 ;;
       *)      arg="$1";      shift ;;
     esac
@@ -192,8 +209,17 @@ cmd_init() {
 
   # Pointer so plain git works from the container root; bare store stays visible.
   echo "gitdir: ./trees-bare.git" > "$dir/.git"
-  git -C "$dir" config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'
-  git -C "$dir" fetch origin
+
+  # The refspec + fetch are what give a bare clone its remote-tracking refs. If
+  # either fails the container has no origin/*, so `add` cannot resolve the
+  # default branch — roll back rather than report success on a broken container.
+  if ! git -C "$dir" config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*' \
+    || ! git -C "$dir" fetch origin; then
+    echo "git trees init: clone succeeded but fetch/config failed — removing $dir" >&2
+    rm -rf "$dir"
+    return 1
+  fi
+  # Optional: fails harmlessly against a remote with no HEAD.
   git -C "$dir" remote set-head origin --auto >/dev/null 2>&1
 
   _seed_agents "$dir" || return 1
@@ -287,7 +313,20 @@ cmd_add() {
       echo "git trees add: branch names must not contain '/'; use dashes (e.g. feature-x), not feature/x" >&2
       return 1
       ;;
+    .|..)
+      echo "git trees add: '$br' is a directory reference, not a branch name" >&2
+      return 1
+      ;;
   esac
+
+  # Validate before anything else touches the name. Without this, `add ..`
+  # resolves to "$root/.." — which always exists — and fails with a directory
+  # collision, and `add 'has space'` only fails after `worktree add` has already
+  # printed "Preparing worktree…". Both report the wrong problem.
+  if ! git check-ref-format "refs/heads/$br"; then
+    echo "git trees add: '$br' is not a valid branch name" >&2
+    return 1
+  fi
 
   root=$(_root) || { echo "git trees add: not in a git repo" >&2; return 1; }
 
@@ -384,12 +423,32 @@ cmd_list() {
   done < <(git for-each-ref --format='%(refname:short)' refs/heads)
 
   if [ "$json" -eq 1 ]; then
+    # Escaping is done character by character on purpose. The obvious
+    # gsub(/\\/, "\\\\", s) does not work: awk reads "\\" in a *replacement*
+    # string as one literal backslash, so it under-escapes and emits invalid
+    # JSON. Plain concatenation has no such rule.
     printf '%s' "$rows" | awk -F'\t' '
-      BEGIN { print "["; sep = "" }
+      function jesc(s,   out, i, n, c) {
+        out = ""; n = length(s)
+        for (i = 1; i <= n; i++) {
+          c = substr(s, i, 1)
+          if (c == "\\")      out = out "\\\\"
+          else if (c == "\"") out = out "\\\""
+          else if (c in ctl)  out = out ctl[c]
+          else                out = out c
+        }
+        return out
+      }
+      BEGIN {
+        # Control characters are not legal raw in a JSON string.
+        for (i = 1; i < 32; i++) ctl[sprintf("%c", i)] = sprintf("\\u%04x", i)
+        ctl["\b"] = "\\b"; ctl["\f"] = "\\f"; ctl["\n"] = "\\n"
+        ctl["\r"] = "\\r"; ctl["\t"] = "\\t"
+        print "["; sep = ""
+      }
       NF {
-        for (i = 1; i <= NF; i++) gsub(/"/, "\\\"", $i)
         printf "%s  {\"branch\":\"%s\",\"upstream\":\"%s\",\"track\":\"%s\",\"date\":\"%s\",\"state\":\"%s\",\"path\":\"%s\"}\n", \
-          sep, $1, $2, $3, $4, $5, $6
+          sep, jesc($1), jesc($2), jesc($3), jesc($4), jesc($5), jesc($6)
         sep = ","
       }
       END { print "]" }'
