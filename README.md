@@ -8,7 +8,6 @@ git trees init brightdigit/some-repo
 cd some-repo
 git trees add feature-x
 git trees list
-git trees clean --older-than 30
 ```
 
 ## Why
@@ -20,7 +19,6 @@ support, but the built-in porcelain leaves gaps:
 - `git worktree add -b` silently inherits the base ref's upstream, so a new
   branch ends up tracking `main` and pushes to the wrong place
 - No single view of worktrees *and* branches that lack one
-- No cleanup for branches whose remote is gone
 - Bare-clone setup for this layout is a four-command incantation
 
 `git-trees` covers those. It's deliberately small and readable — one bash file
@@ -149,19 +147,15 @@ One entry per branch with upstream, ahead/behind, last commit date, clean/dirty,
 and path (relative to the project root). Includes branches with no worktree,
 shown with path `(none)`. `--json` emits the same fields as an array.
 
-### `git trees clean [--older-than N] [--merged|--gone] [--apply]`
+## Removing worktrees
 
-Reports by default; `--apply` executes. Three passes:
+`git-trees` does not delete anything. Remove a worktree and its branch with git:
 
-- **gone** — branches whose upstream is deleted (`[gone]`)
-- **merged** — branches merged into the default branch, *excluding* those with
-  no commits of their own (a branch freshly cut from `main` is technically
-  merged but isn't finished work)
-- **older-than** — worktrees whose directory mtime exceeds N days
-
-`--gone` and `--merged` are mutually exclusive selectors; passing neither runs
-both. Uses `git branch -d` (safe) and tells you when to escalate to `-D`. Never
-removes the repo root or your current directory.
+```bash
+git worktree remove <path>
+git branch -d <branch>          # -d refuses unmerged work; escalate to -D yourself
+git worktree prune
+```
 
 ## Environment
 
@@ -187,8 +181,7 @@ trees() {
 
 ## Known limitations
 
-- `--older-than` uses directory mtime, which build output touches. Last commit
-  date would be a truer measure of staleness.
+- Removing stale worktrees and branches is manual; nothing here deletes.
 - `list` spawns several processes per branch — fine for dozens, slow for hundreds.
 - `add` ignores `base` when the branch already exists rather than failing.
 - Branch names beginning with `-` are unsupported: `add` parses them as options

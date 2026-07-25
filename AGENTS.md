@@ -42,24 +42,30 @@ consequence is that `feature/x` and `feature-x` compete for one directory;
 the directory (`_branch_at`). Do not "fix" that by inventing a suffixed variant:
 a directory whose name the user cannot predict is worse than an error.
 
-**Report before destroy.** `clean` defaults to reporting. Destructive work
-happens only under `--apply`. Use `git branch -d`, never `-D`; when it fails,
-print the `-D` command for the user rather than running it.
+**Nothing destructive.** No subcommand removes a worktree or deletes a branch.
+`clean` did, and was pulled before v1.0.0 ([#34](https://github.com/brightdigit/git-trees/issues/34)).
+Anything that destroys user data must report by default and act only under an
+explicit `--apply`, must use `git branch -d` and never `-D`, and must route
+directory removal through a user-configurable command — see #34 for the full
+contract before adding one.
 
 ## Two bugs that were found by testing — don't regress them
 
 1. **`git worktree add -b <new> <base>` inherits the base ref's upstream.** A
    branch created from `origin/main` silently gets `origin/main` as its upstream
    and will push there. The new-branch path must pass `--no-track`, then let
-   `cmd_track` set the correct upstream.
+   `cmd_track` set the correct upstream. Live in `cmd_add`; any change there
+   needs a fresh test.
 
 2. **`git branch --merged` flags branches with no commits of their own.** A
-   branch just cut from `main` is reachable-from-`main` and looks merged. The
-   merged pass must skip branches where
-   `git rev-list --count origin/<def>..<br>` is 0.
+   branch just cut from `main` is reachable-from-`main` and looks merged. Any
+   merged-branch pass must skip branches where
+   `git rev-list --count origin/<def>..<br>` is 0. No code relies on this today —
+   the `clean` command that did was removed — but the note stays, because losing
+   it is how the bug comes back when `clean` returns (#34).
 
 Both are counterintuitive and both were caught only by running against a real
-repo. Any change touching `add` or `clean --merged` needs a fresh test.
+repo.
 
 ## Testing
 
@@ -91,7 +97,6 @@ Then exercise the paths. Things worth checking after any change:
 - `add` into an existing directory — clear collision error, nonzero exit
 - `add x --print-path` — stdout must be *only* the path
 - `list --json` — valid JSON, includes branches with no worktree
-- `clean` — a freshly cut branch must not appear under "merged"
 - `git trees` outside a repo — clean error, nonzero exit
 
 Automated coverage lives in `.github/workflows/ci.yml` (ubuntu + macOS). Also run
