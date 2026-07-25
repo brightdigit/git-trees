@@ -38,6 +38,14 @@ is the established pattern: path to stdout, all other output to stderr.
 happens only under `--apply`. Use `git branch -d`, never `-D`; when it fails,
 print the `-D` command for the user rather than running it.
 
+**`track` only ever sets `origin/<branch>`.** Same remote, same name. There is
+no flag for an arbitrary upstream, and `origin` is hardcoded throughout —
+deliberately, since the layout assumes one remote. A user wanting something else
+runs `git branch --set-upstream-to` themselves; `track` is idempotent and returns
+early once *any* upstream is set, so it will not fight them. If this ever grows a
+`--upstream <ref>` flag, `cmd_add` must pass it through — `add` calls `cmd_track`
+unconditionally, and would otherwise overwrite what the user asked for.
+
 ## Two bugs that were found by testing — don't regress them
 
 1. **`git worktree add -b <new> <base>` inherits the base ref's upstream.** A
