@@ -1,3 +1,0 @@
-# Moved to .github/workflows/ci.yml
-# Root lint.yml was never picked up by GitHub Actions; CI now runs syntax check,
-# ShellCheck, and smoke tests on ubuntu-latest and macos-latest from that workflow.
