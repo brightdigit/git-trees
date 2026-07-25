@@ -36,7 +36,6 @@ support, but the built-in porcelain leaves gaps:
 - `git worktree add -b` silently inherits the base ref's upstream, so a new
   branch ends up tracking `main` and pushes to the wrong place
 - No single view of worktrees *and* branches that lack one
-- No cleanup for branches whose remote is gone
 - Bare-clone setup for this layout is a four-command incantation
 
 `git-trees` covers those. It's deliberately small and readable — one bash file
@@ -90,8 +89,9 @@ some-repo/                         some-repo/
 - `feature-x/` — one directory per branch, created by `add`, never by `init`
 
 Worktrees share a single object store but have independent working trees,
-indexes, and HEADs. The worktree directory matches the branch name, so branch
-names must not contain `/` — use dashes (`feature-x`, not `feature/x`).
+indexes, and HEADs. Every worktree is a direct child of the container root, so a
+branch's `/` becomes a `-` in the directory name: `feature/x` checks out into
+`feature-x/` while the branch keeps its real name.
 
 ## Prerequisites
 
@@ -207,7 +207,7 @@ containers that `init` did not create. Skipped if the file already exists or no
 template is configured; the notice goes to stderr, so the path on stdout stays
 clean for `$(git trees root)`.
 
-### `git trees add <branch> [base] [--print-path]`
+### `git trees add <branch> [base] [--print-path] [--no-push]`
 
 Creates a worktree, handling three cases:
 
@@ -217,21 +217,42 @@ Creates a worktree, handling three cases:
 | Branch exists on `origin` | Fetch, create with `--track` |
 | Branch is new | Create from `base` (default `origin/<default>`) with `--no-track` |
 
-Upstream is always set afterward via `track`; if that push/upstream setup fails,
-`add` exits nonzero (the worktree may still exist). `--print-path` writes the
-path to stdout and everything else to stderr, for shell wrappers.
+> **`add` writes to the remote.** Upstream is always set afterward via `track`.
+> If the branch does not exist on `origin`, that runs
+> `git push -u origin HEAD` — **which creates the branch on the remote.** This
+> is a reasonable default for parallel coding agents, which need an upstream to
+> push to, but it means a local-feeling command fires CI, sends notifications,
+> and publishes a branch name. Pass `--no-push` to skip it.
 
-Branch names must not contain `/` (rejected with a clear error). If the target
-directory already exists, `add` fails rather than inventing a new name. If the
-branch already exists, `base` is ignored with a warning.
+With `--no-push`, `add` sets the upstream when `origin/<branch>` already exists
+and otherwise leaves it unset, printing the `git push -u origin HEAD` you can run
+yourself. It still exits 0. Set `TREES_NO_PUSH` to any non-empty value to get
+that behavior everywhere without passing the flag.
 
-### `git trees track [path]`
+If the push or upstream setup fails, `add` exits nonzero (the worktree may still
+exist). `--print-path` writes the path to stdout and everything else to stderr,
+for shell wrappers.
+
+Branch names may contain `/`; the directory is the branch name with each `/`
+replaced by `-`, since worktrees do not nest. That makes `feature/x` and
+`feature-x` compete for one directory — whichever exists first keeps it, and
+`add` refuses the other by name rather than inventing a variant. If the target
+directory already exists for any other reason, `add` fails rather than inventing
+a new name. If the branch already exists, `base` is ignored with a warning.
+
+### `git trees track [path] [--no-push]`
 
 Idempotent. Ensures the branch in `path` (default `.`) has an upstream: sets it
-to `origin/<branch>` if that exists remotely, otherwise `push -u`. Returns
+to `origin/<branch>` if that exists remotely, otherwise runs
+`git push -u origin HEAD`, **which creates the branch on `origin`**. Returns
 immediately if an upstream is already configured.
 
-Useful for repairing worktrees created before this tool.
+`--no-push` (or a non-empty `TREES_NO_PUSH`) suppresses that push: the upstream
+is left unset and the exact command to run is printed to stderr. Exit status
+stays 0 — not setting an upstream is the requested outcome, not a failure.
+
+Useful for repairing worktrees created before this tool. Note that pushing needs
+forge credentials; without push rights, `track` fails unless you use `--no-push`.
 
 ### `git trees list [--json]` (alias `ls`)
 
@@ -239,19 +260,15 @@ One entry per branch with upstream, ahead/behind, last commit date, clean/dirty,
 and path (relative to the project root). Includes branches with no worktree,
 shown with path `(none)`. `--json` emits the same fields as an array.
 
-### `git trees clean [--older-than N] [--merged|--gone] [--apply]`
+## Removing worktrees
 
-Reports by default; `--apply` executes. Three passes:
+`git-trees` does not delete anything. Remove a worktree and its branch with git:
 
-- **gone** — branches whose upstream is deleted (`[gone]`)
-- **merged** — branches merged into the default branch, *excluding* those with
-  no commits of their own (a branch freshly cut from `main` is technically
-  merged but isn't finished work)
-- **older-than** — worktrees whose directory mtime exceeds N days
-
-`--gone` and `--merged` are mutually exclusive selectors; passing neither runs
-both. Uses `git branch -d` (safe) and tells you when to escalate to `-D`. Never
-removes the repo root or your current directory.
+```bash
+git worktree remove <path>
+git branch -d <branch>          # -d refuses unmerged work; escalate to -D yourself
+git worktree prune
+```
 
 ## Environment
 
@@ -260,6 +277,7 @@ removes the repo root or your current directory.
 | `TREES_HOST` | `github.com` | Host for `init` URLs |
 | `TREES_ORG` | *(unset)* | Default org; if unset, bare repo names are rejected |
 | `TREES_AGENTS_TEMPLATE` | `~/.config/git-trees/AGENTS.md` | Seeded at the container root by `init` (and `root --agents`) |
+| `TREES_NO_PUSH` | *(unset)* | Any non-empty value: `add`/`track` never create a branch on `origin` |
 
 ## Shell wrapper (optional)
 
@@ -277,10 +295,11 @@ trees() {
 
 ## Known limitations
 
-- `--older-than` uses directory mtime, which build output touches. Last commit
-  date would be a truer measure of staleness.
+- Removing stale worktrees and branches is manual; nothing here deletes.
 - `list` spawns several processes per branch — fine for dozens, slow for hundreds.
 - `add` ignores `base` when the branch already exists rather than failing.
+- Branch names beginning with `-` are unsupported: `add` parses them as options
+  and reports `unknown option`. There is no `--` end-of-options marker.
 - Bash-only (uses process substitution); not POSIX sh.
 
 ## Prior art
