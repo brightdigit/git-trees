@@ -72,7 +72,7 @@ does, you could do with `git worktree` by hand.
 `init` and `add` produce different things — the container first, working copies
 after:
 
-```
+```text
 After `git trees init`:            After `git trees add feature-x`:
 
 some-repo/                         some-repo/
@@ -120,6 +120,7 @@ cd git-trees && ./install.sh              # → ~/.local/bin
 **Convenience — one-line curl.** Fetches only the script:
 
 ```bash
+mkdir -p ~/.local/bin
 curl -o ~/.local/bin/git-trees \
   https://raw.githubusercontent.com/brightdigit/git-trees/v1.0.0/git-trees
 chmod +x ~/.local/bin/git-trees
@@ -144,17 +145,6 @@ case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *)
 
 `install.sh` warns if it isn't; the curl path cannot. Anything on `PATH` named
 `git-trees` becomes `git trees`.
-
-### Uninstall
-
-```bash
-./install.sh --uninstall              # clears ~/.local/bin and /usr/local/bin
-./install.sh --uninstall /opt/bin     # or the prefix you installed to
-```
-
-Pass the same directory you installed to — without it, a custom-prefix install is
-left behind. Uninstall does **not** remove `~/.config/git-trees/AGENTS.md`; it
-says so, and you can delete it yourself.
 
 ## Configuration
 
@@ -220,8 +210,8 @@ Creates a worktree, handling three cases:
 | Branch exists on `origin` | Fetch, create with `--track` |
 | Branch is new | Create from `base` (default `origin/<default>`) with `--no-track` |
 
-> **`add` writes to the remote.** Upstream is always set afterward via `track`.
-> If the branch does not exist on `origin`, that runs
+> **`add` writes to the remote by default.** When pushing is enabled, upstream is
+> set afterward via `track`. If the branch does not exist on `origin`, that runs
 > `git push -u origin HEAD` — **which creates the branch on the remote.** This
 > is a reasonable default for parallel coding agents, which need an upstream to
 > push to, but it means a local-feeling command fires CI, sends notifications,
