@@ -133,8 +133,8 @@ if [ ! -e ~/.config/git-trees/AGENTS.md ] && [ ! -L ~/.config/git-trees/AGENTS.m
 fi
 ```
 
-The URLs above track `main`, so a re-install picks up whatever is current there.
-For a fixed revision, swap `main` for a tag (for example `v1.0.0`).
+`main` is the stable release. A re-install from these URLs picks up the current
+stable script and template.
 
 Either way, make sure the destination is on your `PATH`:
 
