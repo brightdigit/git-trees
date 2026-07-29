@@ -17,7 +17,7 @@ mkdir -p "$DEST" || exit 1
 install -m 0755 "$SRC/git-trees" "$DEST/git-trees" || exit 1
 echo "installed $DEST/git-trees"
 
-# AGENTS.md template — the curl install does not get this.
+# AGENTS.md template — README's curl path installs this too.
 if [ -f "$SRC/AGENTS.md.template" ] && [ ! -f "$CFG/AGENTS.md" ]; then
   mkdir -p "$CFG"
   cp "$SRC/AGENTS.md.template" "$CFG/AGENTS.md"

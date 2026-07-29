@@ -123,19 +123,18 @@ template if that path is already occupied, including a broken symlink):
 ```bash
 mkdir -p ~/.local/bin ~/.config/git-trees
 tmp=$(mktemp) && curl -fsSL -o "$tmp" \
-  https://raw.githubusercontent.com/brightdigit/git-trees/v1.0.0/git-trees \
+  https://raw.githubusercontent.com/brightdigit/git-trees/main/git-trees \
   && mv "$tmp" ~/.local/bin/git-trees
 chmod +x ~/.local/bin/git-trees
 if [ ! -e ~/.config/git-trees/AGENTS.md ] && [ ! -L ~/.config/git-trees/AGENTS.md ]; then
   tmp=$(mktemp) && curl -fsSL -o "$tmp" \
-    https://raw.githubusercontent.com/brightdigit/git-trees/v1.0.0/AGENTS.md.template \
+    https://raw.githubusercontent.com/brightdigit/git-trees/main/AGENTS.md.template \
     && mv "$tmp" ~/.config/git-trees/AGENTS.md
 fi
 ```
 
-The URLs above are pinned to the `v1.0.0` tag, so they give the same files every
-time. Swapping `v1.0.0` for `main` tracks the development branch instead — a
-moving target, and not what you want for an install you intend to keep.
+The URLs above track `main`, so a re-install picks up whatever is current there.
+For a fixed revision, swap `main` for a tag (for example `v1.0.0`).
 
 Either way, make sure the destination is on your `PATH`:
 
