@@ -118,15 +118,19 @@ cd git-trees && ./install.sh              # → ~/.local/bin
 ```
 
 **Convenience — curl.** Fetches the script and the agents template (skips the
-template if `~/.config/git-trees/AGENTS.md` already exists):
+template if that path is already occupied, including a broken symlink):
 
 ```bash
 mkdir -p ~/.local/bin ~/.config/git-trees
-curl -o ~/.local/bin/git-trees \
-  https://raw.githubusercontent.com/brightdigit/git-trees/v1.0.0/git-trees
+tmp=$(mktemp) && curl -fsSL -o "$tmp" \
+  https://raw.githubusercontent.com/brightdigit/git-trees/v1.0.0/git-trees \
+  && mv "$tmp" ~/.local/bin/git-trees
 chmod +x ~/.local/bin/git-trees
-[ -f ~/.config/git-trees/AGENTS.md ] || curl -o ~/.config/git-trees/AGENTS.md \
-  https://raw.githubusercontent.com/brightdigit/git-trees/v1.0.0/AGENTS.md.template
+if [ ! -e ~/.config/git-trees/AGENTS.md ] && [ ! -L ~/.config/git-trees/AGENTS.md ]; then
+  tmp=$(mktemp) && curl -fsSL -o "$tmp" \
+    https://raw.githubusercontent.com/brightdigit/git-trees/v1.0.0/AGENTS.md.template \
+    && mv "$tmp" ~/.config/git-trees/AGENTS.md
+fi
 ```
 
 The URLs above are pinned to the `v1.0.0` tag, so they give the same files every

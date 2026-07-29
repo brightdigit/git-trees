@@ -195,12 +195,16 @@ assert_ok "init --dir with a value" bash "$T" init "file://$ORIGIN" --dir init-f
 assert_fail "init with no argument" bash "$T" init
 assert_fail "init unknown option"   bash "$T" init "file://$ORIGIN" --nope
 
-# Missing template: init still succeeds, warns, and writes no AGENTS.md.
+# Missing template: init still succeeds, warns on stderr, and writes no AGENTS.md.
+err=$(mktemp)
 out=$(env TREES_AGENTS_TEMPLATE="$TMP/no-such-template" \
-  bash "$T" init "file://$ORIGIN" --dir init-notemplate 2>&1)
+  bash "$T" init "file://$ORIGIN" --dir init-notemplate 2>"$err")
+rc=$?
+assert_eq "init exits 0 without a template" "$rc" "0"
 assert_contains "init still reports success without a template" "$out" \
   "initialized init-notemplate"
-assert_contains "init warns when the template is missing" "$out" "no agents template"
+assert_contains "init warns on stderr when the template is missing" "$(cat "$err")" \
+  "no agents template"
 assert_ok "init without a template writes no AGENTS.md" \
   test '!' -e "$TMP/init-notemplate/AGENTS.md"
 
@@ -244,13 +248,17 @@ assert_ok "root --agents succeeds with a broken symlink present" bash "$T" root 
 assert_ok "a broken symlink counts as occupied" test -L "$S3/AGENTS.md"
 assert_eq "the symlink was not replaced" "$(readlink "$S3/AGENTS.md")" "$TMP/definitely-absent"
 
-# No template configured → no-op with a warning, still succeeds.
+# No template configured → no-op with a stderr warning, still succeeds.
 S4=$(new_container seed-notemplate)
 rm -f "$S4/AGENTS.md"
-out=$(env TREES_AGENTS_TEMPLATE="$TMP/no-such-template" bash "$T" root "$S4" --agents 2>&1)
+err=$(mktemp)
+out=$(env TREES_AGENTS_TEMPLATE="$TMP/no-such-template" \
+  bash "$T" root "$S4" --agents 2>"$err")
 rc=$?
 assert_eq "root --agents exits 0 without a template" "$rc" "0"
-assert_contains "root --agents warns when the template is missing" "$out" "no agents template"
+assert_eq "root --agents stdout is only the path without a template" "$out" "$S4"
+assert_contains "root --agents warns on stderr when the template is missing" \
+  "$(cat "$err")" "no agents template"
 assert_ok "nothing was written without a template" test '!' -e "$S4/AGENTS.md"
 
 # stdout stays clean for $(git trees root) even while seeding.
@@ -471,6 +479,8 @@ assert_eq "install.sh template matches AGENTS.md.template" \
   "$(cat "$REPO/AGENTS.md.template")"
 echo CUSTOM > "$IHOME/.config/git-trees/AGENTS.md"
 HOME="$IHOME" bash "$REPO/install.sh" "$IDEST" >/dev/null 2>&1
+rc=$?
+assert_eq "install.sh rerun exits 0" "$rc" "0"
 assert_eq "install.sh does not overwrite an existing template" \
   "$(cat "$IHOME/.config/git-trees/AGENTS.md")" "CUSTOM"
 
