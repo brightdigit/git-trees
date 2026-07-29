@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.0.1
+
+## What's Changed
+
+* Install the agents template on curl and warn when missing by @leogdion in https://github.com/brightdigit/git-trees/pull/46
+* Pin the curl install to `main` as the stable release
+
+**Full Changelog**: https://github.com/brightdigit/git-trees/compare/v1.0.0...v1.0.1
+
 ## v1.0.0
 
 First release of `git-trees`: a `git` subcommand for managing a bare-repo +
