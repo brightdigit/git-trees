@@ -131,7 +131,10 @@ _ensure_git_pointer() {
 # 1 when neither test holds — an inverted error path waiting to happen. Both
 # guards are written out.
 _seed_agents() {
-  [ -f "$TREES_AGENTS_TEMPLATE" ] || return 0
+  if [ ! -f "$TREES_AGENTS_TEMPLATE" ]; then
+    echo "git trees: no agents template at $TREES_AGENTS_TEMPLATE — skipping AGENTS.md seed (run ./install.sh or set TREES_AGENTS_TEMPLATE)" >&2
+    return 0
+  fi
   # Any existing path (including a broken symlink) is occupied — never overwrite.
   # -e is false for a broken symlink; -L is true. Both tests are needed.
   if [ -e "$1/AGENTS.md" ] || [ -L "$1/AGENTS.md" ]; then

@@ -92,15 +92,16 @@ What the suite covers:
 - **help/dispatch** — `help`, `--help`, and unknown command
 - **outside a repo** — `list` and `root` both exit nonzero
 - **init** — happy path over `file://`; the gitdir pointer, bare store, seeded
-  `AGENTS.md`, and `origin/*` refs it must produce; the container root having no
-  work tree; refusal on an existing directory; **rollback when the post-clone
-  fetch fails**, and that a retry then works; `--host`/`--dir` with a missing
-  value exiting promptly rather than hanging
+  `AGENTS.md` content matching the template, and `origin/*` refs it must produce;
+  the container root having no work tree; refusal on an existing directory;
+  **rollback when the post-clone fetch fails**, and that a retry then works;
+  `--host`/`--dir` with a missing value exiting promptly rather than hanging;
+  missing template warns and writes no `AGENTS.md`
 - **root** — printing the container, adopting a bare container by writing the
   `.git` pointer under the store's own name, rejecting a plain directory
 - **root --agents** — seeds when absent; never overwrites a regular file; treats
-  a **broken symlink** as occupied; no-ops without a template; keeps stdout to
-  the path alone
+  a **broken symlink** as occupied; warns and no-ops without a template; keeps
+  stdout to the path alone
 - **add** — `.`, `..` and `'has space'` reported as bad branch names rather than
   directory collisions, and rejected before `Preparing worktree`; upstream
   exactly `origin/feature-x` for an existing remote branch and exactly
@@ -114,6 +115,9 @@ What the suite covers:
 - **list** — text output, branches with no worktree shown as `(none)`,
   `--json` parsing, and a worktree whose path contains `\` and `"` round-tripping
   through `json.load`
+- **install.sh** — places the binary; seeds `~/.config/git-trees/AGENTS.md` from
+  the template under a redirected `HOME`; does not overwrite an existing config
+  file
 
 Two assertion shapes are easy to get wrong:
 

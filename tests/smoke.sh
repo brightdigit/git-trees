@@ -158,6 +158,8 @@ assert_contains "init reports the default branch" "$out" "initialized init-ok (d
 assert_ok "init wrote the gitdir pointer" test -f "$TMP/init-ok/.git"
 assert_ok "init created the bare store"    test -d "$TMP/init-ok/trees-bare.git"
 assert_ok "init seeded AGENTS.md"          test -f "$TMP/init-ok/AGENTS.md"
+assert_eq "init seeded content from the template" \
+  "$(cat "$TMP/init-ok/AGENTS.md")" "seeded-agents-template"
 # The refspec is what gives a bare clone its remote-tracking refs.
 assert_ok "init set up origin/* refs" \
   git -C "$TMP/init-ok" show-ref --verify --quiet refs/remotes/origin/main
@@ -192,6 +194,15 @@ assert_no_hang "init org/repo --host with no value"  bash "$T" init org/repo --h
 assert_ok "init --dir with a value" bash "$T" init "file://$ORIGIN" --dir init-flagged
 assert_fail "init with no argument" bash "$T" init
 assert_fail "init unknown option"   bash "$T" init "file://$ORIGIN" --nope
+
+# Missing template: init still succeeds, warns, and writes no AGENTS.md.
+out=$(env TREES_AGENTS_TEMPLATE="$TMP/no-such-template" \
+  bash "$T" init "file://$ORIGIN" --dir init-notemplate 2>&1)
+assert_contains "init still reports success without a template" "$out" \
+  "initialized init-notemplate"
+assert_contains "init warns when the template is missing" "$out" "no agents template"
+assert_ok "init without a template writes no AGENTS.md" \
+  test '!' -e "$TMP/init-notemplate/AGENTS.md"
 
 # --- root --------------------------------------------------------------------
 
@@ -233,11 +244,13 @@ assert_ok "root --agents succeeds with a broken symlink present" bash "$T" root 
 assert_ok "a broken symlink counts as occupied" test -L "$S3/AGENTS.md"
 assert_eq "the symlink was not replaced" "$(readlink "$S3/AGENTS.md")" "$TMP/definitely-absent"
 
-# No template configured → no-op, still succeeds.
+# No template configured → no-op with a warning, still succeeds.
 S4=$(new_container seed-notemplate)
 rm -f "$S4/AGENTS.md"
-assert_ok "root --agents is a no-op without a template" \
-  env TREES_AGENTS_TEMPLATE="$TMP/no-such-template" bash "$T" root "$S4" --agents
+out=$(env TREES_AGENTS_TEMPLATE="$TMP/no-such-template" bash "$T" root "$S4" --agents 2>&1)
+rc=$?
+assert_eq "root --agents exits 0 without a template" "$rc" "0"
+assert_contains "root --agents warns when the template is missing" "$out" "no agents template"
 assert_ok "nothing was written without a template" test '!' -e "$S4/AGENTS.md"
 
 # stdout stays clean for $(git trees root) even while seeding.
@@ -439,6 +452,27 @@ for e in json.load(sys.stdin):
 else
   fail "could not create a worktree with a backslash in its path"
 fi
+
+# --- install.sh --------------------------------------------------------------
+
+section "install.sh"
+REPO=$(dirname "$T")
+IHOME="$TMP/install-home"
+IDEST="$TMP/install-bin"
+mkdir -p "$IHOME" "$IDEST"
+out=$(HOME="$IHOME" bash "$REPO/install.sh" "$IDEST" 2>&1)
+rc=$?
+assert_eq "install.sh exits 0" "$rc" "0"
+assert_ok "install.sh placed the binary" test -x "$IDEST/git-trees"
+assert_ok "install.sh seeded the agents template" \
+  test -f "$IHOME/.config/git-trees/AGENTS.md"
+assert_eq "install.sh template matches AGENTS.md.template" \
+  "$(cat "$IHOME/.config/git-trees/AGENTS.md")" \
+  "$(cat "$REPO/AGENTS.md.template")"
+echo CUSTOM > "$IHOME/.config/git-trees/AGENTS.md"
+HOME="$IHOME" bash "$REPO/install.sh" "$IDEST" >/dev/null 2>&1
+assert_eq "install.sh does not overwrite an existing template" \
+  "$(cat "$IHOME/.config/git-trees/AGENTS.md")" "CUSTOM"
 
 # --- summary -----------------------------------------------------------------
 
