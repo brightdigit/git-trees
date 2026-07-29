@@ -117,22 +117,23 @@ cd git-trees && ./install.sh              # → ~/.local/bin
 ./install.sh /usr/local/bin               # or anywhere else
 ```
 
-**Convenience — one-line curl.** Fetches only the script:
+**Convenience — curl.** Fetches the script and the agents template (skips the
+template if that path is already occupied, including a broken symlink):
 
 ```bash
-mkdir -p ~/.local/bin
-curl -o ~/.local/bin/git-trees \
-  https://raw.githubusercontent.com/brightdigit/git-trees/v1.0.0/git-trees
+mkdir -p ~/.local/bin ~/.config/git-trees
+tmp=$(mktemp) && curl -fsSL -o "$tmp" \
+  https://raw.githubusercontent.com/brightdigit/git-trees/v1.0.0/git-trees \
+  && mv "$tmp" ~/.local/bin/git-trees
 chmod +x ~/.local/bin/git-trees
+if [ ! -e ~/.config/git-trees/AGENTS.md ] && [ ! -L ~/.config/git-trees/AGENTS.md ]; then
+  tmp=$(mktemp) && curl -fsSL -o "$tmp" \
+    https://raw.githubusercontent.com/brightdigit/git-trees/v1.0.0/AGENTS.md.template \
+    && mv "$tmp" ~/.config/git-trees/AGENTS.md
+fi
 ```
 
-One thing to know about this path: it does **not** create
-`~/.config/git-trees/AGENTS.md`, so the documented default for
-`TREES_AGENTS_TEMPLATE` points at a file you don't have — seeding is simply
-skipped, which is harmless, but `init` will not write an `AGENTS.md`. Use the
-installer if you want the template too.
-
-The URL above is pinned to the `v1.0.0` tag, so it gives the same script every
+The URLs above are pinned to the `v1.0.0` tag, so they give the same files every
 time. Swapping `v1.0.0` for `main` tracks the development branch instead — a
 moving target, and not what you want for an install you intend to keep.
 
@@ -156,7 +157,7 @@ export TREES_ORG=your-org
 
 That's usually all you need — `TREES_HOST` defaults to `github.com` and
 `TREES_AGENTS_TEMPLATE` defaults to `~/.config/git-trees/AGENTS.md`, which is
-where `install.sh` puts the template.
+where `install.sh` and the curl install put the template.
 
 With `TREES_ORG` set, `git trees init my-repo` expands to `your-org/my-repo`.
 Without it, bare repo names are rejected and you must pass `org/repo`.
