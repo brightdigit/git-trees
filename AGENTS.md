@@ -48,10 +48,10 @@ consequence is that `feature/x` and `feature-x` compete for one directory;
 the directory (`_branch_at`). Do not "fix" that by inventing a suffixed variant:
 a directory whose name the user cannot predict is worse than an error.
 
-**Nothing destructive.** No subcommand removes a worktree or deletes a branch.
-Anything that destroys user data must report by default and act only under an
-explicit `--apply`, must use `git branch -d` and never `-D`, and must route
-directory removal through a user-configurable command.
+**Nothing destructive without `--apply`.** `rm` and `clean` report by default and modify state only when `--apply` is explicitly passed. Local branch deletions use `git branch -d` (falling back to `-D` on `clean` once confirmed gone/merged, or on `rm` when `--apply` is passed), and worktree directory removals route through `TREES_RM_CMD` when configured (defaulting to `git worktree remove`).
+
+
+
 
 **`track` only ever sets `origin/<branch>`.** Same remote, same name. There is
 no flag for an arbitrary upstream, and `origin` is hardcoded throughout —
@@ -118,6 +118,8 @@ What the suite covers:
 - **install.sh** — places the binary; seeds `~/.config/git-trees/AGENTS.md` from
   the template under a redirected `HOME`; does not overwrite an existing config
   file
+- **rm** — dry run vs `--apply`, worktree removal by branch or path, safe branch deletion refusal on unmerged branches, and custom `TREES_RM_CMD` routing
+- **clean** — `--gone` identification and deletion, `--merged` identification across direct merges, rebased commits, and squash-merged PRs, zero-commit fresh branch preservation, dry run vs `--apply`, and custom `TREES_RM_CMD` routing
 
 Two assertion shapes are easy to get wrong:
 

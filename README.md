@@ -253,9 +253,39 @@ One entry per branch with upstream, ahead/behind, last commit date, clean/dirty,
 and path (relative to the project root). Includes branches with no worktree,
 shown with path `(none)`. `--json` emits the same fields as an array.
 
+### `git trees rm <branch|path> [--apply]`
+
+Removes a worktree and deletes its branch. Accepts either a branch name or a worktree path.
+
+By default (without `--apply`), reports what would be removed without making any changes. Pass `--apply` to perform the removal.
+
+Worktree directories are removed via `TREES_RM_CMD` if configured, or `git worktree remove`. Local branches are deleted using `git branch -d` (falling back to `git branch -D` if needed).
+
+
+### `git trees clean [--merged|--gone] [--apply]`
+
+Reports or removes stale worktrees and branches.
+
+Selectors:
+- `--gone`: branches whose upstream remote branch was deleted (`[gone]`)
+- `--merged`: branches merged into the default branch. Automatically detects direct merges, rebased/cherry-picked commits, and squash-merged PRs while leaving fresh 0-commit branches intact.
+
+Passing neither selector runs both `--gone` and `--merged`.
+
+By default (without `--apply`), `clean` operates in dry-run mode and prints matching branches/worktrees without deleting them. Pass `--apply` to execute removals. Worktree directories are removed via `TREES_RM_CMD` if set (defaulting to `git worktree remove`), and branches are deleted using `git branch -d` (falling back to `git branch -D` for gone/squash-merged branches).
+
+
+
 ## Removing worktrees
 
-`git-trees` does not delete anything. Remove a worktree and its branch with git:
+`git-trees` provides `rm` and `clean` for removing worktrees and branches:
+
+```bash
+git trees rm feature-x --apply            # remove a single worktree and its branch
+git trees clean --apply                   # remove merged and gone branches/worktrees
+```
+
+Both subcommands default to dry-run mode (report only) unless `--apply` is passed. Alternatively, you can use plain git:
 
 ```bash
 git worktree remove <path>
@@ -271,6 +301,7 @@ git worktree prune
 | `TREES_ORG` | *(unset)* | Default org; if unset, bare repo names are rejected |
 | `TREES_AGENTS_TEMPLATE` | `~/.config/git-trees/AGENTS.md` | Seeded at the container root by `init` (and `root --agents`) |
 | `TREES_NO_PUSH` | *(unset)* | Any non-empty value: `add`/`track` never create a branch on `origin` |
+| `TREES_RM_CMD` | *(unset)* | Custom command for worktree directory removal (defaults to `git worktree remove`) |
 
 ## Shell wrapper (optional)
 
@@ -288,8 +319,8 @@ trees() {
 
 ## Known limitations
 
-- Removing stale worktrees and branches is manual; nothing here deletes.
 - `list` spawns several processes per branch — fine for dozens, slow for hundreds.
+
 - `add` ignores `base` when the branch already exists rather than failing.
 - Branch names beginning with `-` are unsupported: `add` parses them as options
   and reports `unknown option`. There is no `--` end-of-options marker.

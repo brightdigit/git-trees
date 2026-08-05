@@ -142,6 +142,9 @@ assert_fail "unknown command exits nonzero" bash "$T" definitely-not-a-command
 out=$(bash "$T" help 2>&1)
 assert_contains "help lists add" "$out" "add <branch>"
 assert_contains "help lists list" "$out" "list [--json]"
+assert_contains "help lists rm" "$out" "rm <branch|path>"
+assert_contains "help lists clean" "$out" "clean [--merged|--gone]"
+
 
 section "outside a repo"
 mkdir -p "$TMP/plain"
@@ -484,7 +487,106 @@ assert_eq "install.sh rerun exits 0" "$rc" "0"
 assert_eq "install.sh does not overwrite an existing template" \
   "$(cat "$IHOME/.config/git-trees/AGENTS.md")" "CUSTOM"
 
+# --- rm ----------------------------------------------------------------------
+
+section "rm"
+RM_C=$(new_container rm-c)
+cd "$RM_C" || exit 1
+
+assert_ok "create worktree to remove" bash "$T" add rm-target --no-push
+assert_ok "worktree directory exists" test -d rm-target
+
+out=$(bash "$T" rm rm-target 2>&1)
+assert_ok "dry run leaves worktree intact" test -d rm-target
+assert_contains "dry run reports plan" "$out" "Would remove worktree"
+assert_contains "dry run instructs to use --apply" "$out" "(report only — pass --apply to execute)"
+
+assert_ok "rm with --apply" bash "$T" rm rm-target --apply
+assert_fail "worktree directory deleted" test -e rm-target
+assert_fail "branch deleted" git show-ref --verify --quiet refs/heads/rm-target
+
+# Unmerged branch: worktree removed, branch preserved with error warning
+assert_ok "create unmerged worktree" bash "$T" add rm-unmerged --no-push
+echo "unmerged data" > rm-unmerged/unmerged.txt
+git -C rm-unmerged add . && git -C rm-unmerged commit -qm "unmerged commit"
+
+assert_ok "rm --apply removes worktree and unmerged branch" bash "$T" rm rm-unmerged --apply
+assert_fail "worktree directory deleted for unmerged" test -e rm-unmerged
+assert_fail "unmerged branch deleted" git show-ref --verify --quiet refs/heads/rm-unmerged
+
+
+# Custom TREES_RM_CMD
+assert_ok "create worktree for custom TREES_RM_CMD" bash "$T" add rm-custom --no-push
+assert_ok "rm with TREES_RM_CMD" env TREES_RM_CMD="rm -rf" bash "$T" rm rm-custom --apply
+assert_fail "custom rm deleted directory" test -e rm-custom
+assert_fail "custom rm deleted branch" git show-ref --verify --quiet refs/heads/rm-custom
+
+assert_fail "rm with no argument" bash "$T" rm
+assert_fail "rm with nonexistent target" bash "$T" rm nonexistent
+
+
+# --- clean -------------------------------------------------------------------
+
+section "clean"
+CLEAN_C=$(new_container clean-c)
+cd "$CLEAN_C" || exit 1
+
+# Setup origin repo changes for clean testing
+# 1. Gone upstream branch
+assert_ok "add gone-branch" bash "$T" add gone-branch
+git -C "$ORIGIN" branch -D gone-branch >/dev/null 2>&1
+
+# 2. Direct merged branch
+assert_ok "add merged-direct" bash "$T" add merged-direct
+echo "direct change" > merged-direct/direct.txt
+git -C merged-direct add . && git -C merged-direct commit -qm "direct commit"
+git -C merged-direct push -u origin merged-direct >/dev/null 2>&1
+( cd "$ORIGIN" && git checkout -q main && git merge -q merged-direct --no-ff -m "merge direct" ) >/dev/null 2>&1
+git -C "$CLEAN_C" fetch -q origin
+
+# 3. Rebase merged branch
+assert_ok "add merged-rebase" bash "$T" add merged-rebase
+echo "rebase change" > merged-rebase/rebase.txt
+git -C merged-rebase add . && git -C merged-rebase commit -qm "rebase commit"
+git -C merged-rebase push -u origin merged-rebase >/dev/null 2>&1
+( cd "$ORIGIN" && git checkout -q main && git cherry-pick merged-rebase ) >/dev/null 2>&1
+git -C "$CLEAN_C" fetch -q origin
+
+# 4. Squash merged branch
+assert_ok "add merged-squash" bash "$T" add merged-squash
+echo "squash change" > merged-squash/squash.txt
+git -C merged-squash add . && git -C merged-squash commit -qm "squash commit"
+git -C merged-squash push -u origin merged-squash >/dev/null 2>&1
+( cd "$ORIGIN" && git checkout -q main && git merge -q --squash merged-squash && git commit -qm "squash merge commit" ) >/dev/null 2>&1
+git -C "$CLEAN_C" fetch -q origin
+
+# 5. Fresh 0-commit branch cut from main (MUST NOT be cleaned)
+assert_ok "add fresh-branch" bash "$T" add fresh-branch --no-push
+
+
+
+# Run dry run
+out=$(bash "$T" clean 2>&1)
+assert_contains "clean dry run reports gone branch" "$out" "gone-branch"
+assert_contains "clean dry run reports direct merged" "$out" "merged-direct"
+assert_contains "clean dry run reports rebase merged" "$out" "merged-rebase"
+assert_contains "clean dry run reports squash merged" "$out" "merged-squash"
+assert_not_contains "clean dry run preserves fresh 0-commit branch" "$out" "fresh-branch"
+assert_contains "clean dry run reports report-only notice" "$out" "(report only — pass --apply to execute)"
+
+# Apply clean
+assert_ok "clean --apply" bash "$T" clean --apply
+assert_fail "gone-branch deleted" git show-ref --verify --quiet refs/heads/gone-branch
+assert_fail "merged-direct deleted" git show-ref --verify --quiet refs/heads/merged-direct
+assert_fail "merged-rebase deleted" git show-ref --verify --quiet refs/heads/merged-rebase
+assert_fail "merged-squash deleted" git show-ref --verify --quiet refs/heads/merged-squash
+assert_ok "fresh-branch preserved after clean" git show-ref --verify --quiet refs/heads/fresh-branch
+
+# Cleanup fresh-branch
+bash "$T" rm fresh-branch --apply >/dev/null 2>&1
+
 # --- summary -----------------------------------------------------------------
+
 
 cd "$TMP" || exit 1
 echo
