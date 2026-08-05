@@ -142,6 +142,9 @@ assert_fail "unknown command exits nonzero" bash "$T" definitely-not-a-command
 out=$(bash "$T" help 2>&1)
 assert_contains "help lists add" "$out" "add <branch>"
 assert_contains "help lists list" "$out" "list [--json]"
+assert_contains "help lists rm" "$out" "rm <branch|path>"
+assert_contains "help lists clean" "$out" "clean [--merged|--gone]"
+
 
 section "outside a repo"
 mkdir -p "$TMP/plain"
@@ -484,7 +487,175 @@ assert_eq "install.sh rerun exits 0" "$rc" "0"
 assert_eq "install.sh does not overwrite an existing template" \
   "$(cat "$IHOME/.config/git-trees/AGENTS.md")" "CUSTOM"
 
+# --- rm ----------------------------------------------------------------------
+
+section "rm"
+RM_C=$(new_container rm-c)
+cd "$RM_C" || exit 1
+
+assert_ok "create worktree to remove" bash "$T" add rm-target --no-push
+assert_ok "worktree directory exists" test -d rm-target
+
+out=$(bash "$T" rm rm-target 2>&1)
+assert_ok "dry run leaves worktree intact" test -d rm-target
+assert_contains "dry run reports plan" "$out" "Would remove worktree"
+assert_contains "dry run instructs to use --apply" "$out" "(report only — pass --apply to execute)"
+
+assert_ok "rm with --apply" bash "$T" rm rm-target --apply
+assert_fail "worktree directory deleted" test -e rm-target
+assert_fail "branch deleted" git show-ref --verify --quiet refs/heads/rm-target
+
+# Unmerged branch: `-d` refuses it, so cmd_rm escalates to `-D` and both the
+# worktree and the branch go under --apply. The commit is asserted: if it failed
+# quietly the branch would be merged, `-d` would succeed, and the assertions
+# below would pass without ever exercising the escalation.
+assert_ok "create unmerged worktree" bash "$T" add rm-unmerged --no-push
+echo "unmerged data" > rm-unmerged/unmerged.txt
+assert_ok "stage unmerged work" in_dir rm-unmerged git add .
+assert_ok "commit unmerged work" in_dir rm-unmerged git commit -qm "unmerged commit"
+
+assert_ok "rm --apply removes worktree and unmerged branch" bash "$T" rm rm-unmerged --apply
+assert_fail "worktree directory deleted for unmerged" test -e rm-unmerged
+assert_fail "unmerged branch deleted" git show-ref --verify --quiet refs/heads/rm-unmerged
+
+
+# Path target. cmd_rm resolves a branch name first, and every worktree above has
+# a directory named after its branch, so the branch arm always wins. A slugged
+# directory (`rm/by-path` -> `rm-by-path`) is not a branch name, so this is the
+# only shape that reaches the path arm.
+assert_ok "create slashed branch worktree" bash "$T" add rm/by-path --no-push
+assert_ok "slugged directory exists" test -d rm-by-path
+assert_ok "rm by path" bash "$T" rm "$RM_C/rm-by-path" --apply
+assert_fail "worktree removed by path" test -e rm-by-path
+assert_fail "branch removed by path" git show-ref --verify --quiet refs/heads/rm/by-path
+
+# A plain directory is not a worktree and must be refused. Without the guard,
+# TREES_RM_CMD would delete it outright — `rm .` would take out the container
+# root and the bare store with it.
+mkdir -p not-a-worktree
+assert_fail "rm refuses a non-worktree directory" \
+  env TREES_RM_CMD="rm -rf" bash "$T" rm not-a-worktree --apply
+assert_ok "non-worktree directory left intact" test -d not-a-worktree
+assert_ok "container root survives rm ." \
+  env TREES_RM_CMD="rm -rf" bash -c "bash '$T' rm . --apply; test -d '$RM_C/trees-bare.git'"
+
+
+# Custom TREES_RM_CMD
+assert_ok "create worktree for custom TREES_RM_CMD" bash "$T" add rm-custom --no-push
+assert_ok "rm with TREES_RM_CMD" env TREES_RM_CMD="rm -rf" bash "$T" rm rm-custom --apply
+assert_fail "custom rm deleted directory" test -e rm-custom
+assert_fail "custom rm deleted branch" git show-ref --verify --quiet refs/heads/rm-custom
+
+assert_fail "rm with no argument" bash "$T" rm
+assert_fail "rm with nonexistent target" bash "$T" rm nonexistent
+
+
+# --- clean -------------------------------------------------------------------
+
+# KEEP THIS SECTION LAST. Its fixtures mutate the shared $ORIGIN — deleting a
+# branch, then merging, cherry-picking and squashing onto main. Every
+# new_container clones $ORIGIN, so any section running after this one sees a
+# different default-branch history than the ones before it.
+section "clean"
+CLEAN_C=$(new_container clean-c)
+cd "$CLEAN_C" || exit 1
+
+# Setup origin repo changes for clean testing. Each step is asserted: a silent
+# failure here (a dirty $ORIGIN worktree, a checkout that did not land) would
+# surface as a confusing failure in the assertions far below instead.
+# 1. Gone upstream branch
+assert_ok "add gone-branch" bash "$T" add gone-branch
+assert_ok "delete gone-branch on origin" git -C "$ORIGIN" branch -D gone-branch
+
+# 2. Direct merged branch
+assert_ok "add merged-direct" bash "$T" add merged-direct
+echo "direct change" > merged-direct/direct.txt
+assert_ok "stage merged-direct" in_dir merged-direct git add .
+assert_ok "commit merged-direct" in_dir merged-direct git commit -qm "direct commit"
+assert_ok "push merged-direct" in_dir merged-direct git push -q -u origin merged-direct
+assert_ok "merge merged-direct into origin main" \
+  in_dir "$ORIGIN" git -c advice.detachedHead=false checkout -q main
+assert_ok "merge merged-direct --no-ff" \
+  in_dir "$ORIGIN" git merge -q merged-direct --no-ff -m "merge direct"
+assert_ok "fetch after direct merge" git -C "$CLEAN_C" fetch -q origin
+
+# 3. Rebase merged branch
+assert_ok "add merged-rebase" bash "$T" add merged-rebase
+echo "rebase change" > merged-rebase/rebase.txt
+assert_ok "stage merged-rebase" in_dir merged-rebase git add .
+assert_ok "commit merged-rebase" in_dir merged-rebase git commit -qm "rebase commit"
+assert_ok "push merged-rebase" in_dir merged-rebase git push -q -u origin merged-rebase
+assert_ok "checkout origin main for cherry-pick" in_dir "$ORIGIN" git checkout -q main
+assert_ok "cherry-pick merged-rebase" in_dir "$ORIGIN" git cherry-pick merged-rebase
+
+assert_ok "fetch after cherry-pick" git -C "$CLEAN_C" fetch -q origin
+
+# 4. Squash merged branch
+assert_ok "add merged-squash" bash "$T" add merged-squash
+echo "squash change" > merged-squash/squash.txt
+assert_ok "stage merged-squash" in_dir merged-squash git add .
+assert_ok "commit merged-squash" in_dir merged-squash git commit -qm "squash commit"
+assert_ok "push merged-squash" in_dir merged-squash git push -q -u origin merged-squash
+assert_ok "checkout origin main for squash" in_dir "$ORIGIN" git checkout -q main
+assert_ok "squash merge merged-squash" in_dir "$ORIGIN" git merge -q --squash merged-squash
+assert_ok "commit the squash merge" in_dir "$ORIGIN" git commit -qm "squash merge commit"
+assert_ok "fetch after squash merge" git -C "$CLEAN_C" fetch -q origin
+
+# 5. Fresh 0-commit branch cut from main (MUST NOT be cleaned)
+assert_ok "add fresh-branch" bash "$T" add fresh-branch --no-push
+
+
+
+# Run dry run
+out=$(bash "$T" clean 2>&1)
+assert_contains "clean dry run reports gone branch" "$out" "gone-branch"
+assert_contains "clean dry run reports direct merged" "$out" "merged-direct"
+assert_contains "clean dry run reports rebase merged" "$out" "merged-rebase"
+assert_contains "clean dry run reports squash merged" "$out" "merged-squash"
+assert_not_contains "clean dry run preserves fresh 0-commit branch" "$out" "fresh-branch"
+assert_contains "clean dry run reports report-only notice" "$out" "(report only — pass --apply to execute)"
+
+# Each selector on its own. Passing neither runs both, so the default above
+# cannot tell us that --gone and --merged actually gate their own sections.
+out=$(bash "$T" clean --gone 2>&1)
+assert_contains "clean --gone runs the gone section" "$out" "== branches with gone upstream =="
+assert_not_contains "clean --gone skips the merged section" "$out" "== branches merged into"
+assert_contains "clean --gone reports gone-branch" "$out" "gone-branch"
+assert_not_contains "clean --gone omits merged branches" "$out" "merged-direct"
+
+out=$(bash "$T" clean --merged 2>&1)
+assert_contains "clean --merged runs the merged section" "$out" "== branches merged into"
+assert_not_contains "clean --merged skips the gone section" "$out" "== branches with gone upstream =="
+assert_contains "clean --merged reports merged-direct" "$out" "merged-direct"
+
+# Apply clean. Assert the worktree directories too, not just the refs — a broken
+# _remove_worktree call would leave every directory behind and still pass a
+# refs-only check.
+assert_ok "clean --apply" bash "$T" clean --apply
+assert_fail "gone-branch deleted" git show-ref --verify --quiet refs/heads/gone-branch
+assert_fail "gone-branch worktree removed" test -e gone-branch
+assert_fail "merged-direct deleted" git show-ref --verify --quiet refs/heads/merged-direct
+assert_fail "merged-direct worktree removed" test -e merged-direct
+assert_fail "merged-rebase deleted" git show-ref --verify --quiet refs/heads/merged-rebase
+assert_fail "merged-rebase worktree removed" test -e merged-rebase
+assert_fail "merged-squash deleted" git show-ref --verify --quiet refs/heads/merged-squash
+assert_fail "merged-squash worktree removed" test -e merged-squash
+assert_ok "fresh-branch preserved after clean" git show-ref --verify --quiet refs/heads/fresh-branch
+assert_ok "fresh-branch worktree preserved" test -d fresh-branch
+
+# TREES_RM_CMD routing through clean, on a branch whose upstream goes away.
+assert_ok "add clean-custom" bash "$T" add clean-custom
+assert_ok "delete clean-custom on origin" git -C "$ORIGIN" branch -D clean-custom
+assert_ok "clean --gone with TREES_RM_CMD" \
+  env TREES_RM_CMD="rm -rf" bash "$T" clean --gone --apply
+assert_fail "clean routed removal through TREES_RM_CMD" test -e clean-custom
+assert_fail "clean deleted the gone branch" git show-ref --verify --quiet refs/heads/clean-custom
+
+# Cleanup fresh-branch
+bash "$T" rm fresh-branch --apply >/dev/null 2>&1
+
 # --- summary -----------------------------------------------------------------
+
 
 cd "$TMP" || exit 1
 echo
