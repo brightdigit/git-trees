@@ -44,11 +44,11 @@ _is_branch_merged() {   # _is_branch_merged <branch> <default_branch> -> 0 if me
   br_commit=$(git rev-parse "$br" 2>/dev/null) || return 1
   mb=$(git merge-base "origin/$def" "$br" 2>/dev/null) || return 1
 
-  # 1. Direct merge check: br is an ancestor of origin/$def AND br is not identical to origin/$def tip
+  # 1. Direct merge check: br is an ancestor of origin/$def AND br is not identical to origin/$def tip.
+  # Comparing against $mb would be dead code — once br is an ancestor, the merge base *is* br.
+  # A zero-commit branch sitting on an older origin/$def commit is merged by this rule; only a
+  # branch still at the tip (a freshly cut one) is spared, which is the case worth protecting.
   if git merge-base --is-ancestor "$br" "origin/$def" 2>/dev/null; then
-    if [ "$br_commit" != "$mb" ]; then
-      return 0
-    fi
     if [ "$br_commit" != "$(git rev-parse "origin/$def" 2>/dev/null)" ]; then
       return 0
     fi
@@ -56,7 +56,9 @@ _is_branch_merged() {   # _is_branch_merged <branch> <default_branch> -> 0 if me
 
   # 2. Rebase / Cherry-pick check (git cherry has no '+' lines)
   if git rev-parse --verify --quiet "origin/$def" >/dev/null; then
-    if [ "$(git rev-list --count "$mb..$br" 2>/dev/null)" -gt 0 ]; then
+    # `|| echo 0`: rev-list prints nothing when it fails, and `[ "" -gt 0 ]` would
+    # leak a raw "integer expression expected" from bash to the user's terminal.
+    if [ "$(git rev-list --count "$mb..$br" 2>/dev/null || echo 0)" -gt 0 ]; then
       if ! git cherry "origin/$def" "$br" 2>/dev/null | grep -q '^+'; then
         return 0
       fi
@@ -66,7 +68,7 @@ _is_branch_merged() {   # _is_branch_merged <branch> <default_branch> -> 0 if me
   # 3. Squash-merge tree match (branch tree exists in origin/$def history)
   br_tree=$(git rev-parse "$br^{tree}" 2>/dev/null)
   if [ -n "$br_tree" ] && git log -n 100 --format='%T' "origin/$def" 2>/dev/null | grep -qx "$br_tree"; then
-    if [ "$(git rev-list --count "$mb..$br" 2>/dev/null)" -gt 0 ]; then
+    if [ "$(git rev-list --count "$mb..$br" 2>/dev/null || echo 0)" -gt 0 ]; then
       return 0
     fi
   fi
@@ -74,7 +76,9 @@ _is_branch_merged() {   # _is_branch_merged <branch> <default_branch> -> 0 if me
   # 4. Squash-merge patch-id match
   patch_id=$(git diff "$mb..$br" 2>/dev/null | git patch-id | awk '{print $1}')
   if [ -n "$patch_id" ]; then
-    if git log -p "$mb..origin/$def" 2>/dev/null | git patch-id | awk '{print $1}' | grep -qx "$patch_id"; then
+    # Same 100-commit window as the tree check above. Unbounded, this renders every
+    # patch since the merge base — once per candidate branch, on every `clean`.
+    if git log -p -n 100 "$mb..origin/$def" 2>/dev/null | git patch-id | awk '{print $1}' | grep -qx "$patch_id"; then
       return 0
     fi
   fi
@@ -588,7 +592,7 @@ cmd_list() {
 # --- rm ----------------------------------------------------------------------
 
 cmd_rm() {
-  local target="" apply=0 br="" path="" root
+  local target="" apply=0 br="" path=""
 
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -606,14 +610,25 @@ cmd_rm() {
     return 1
   }
 
-  root=$(_root) || { echo "git trees rm: not in a git repo" >&2; return 1; }
+  _root >/dev/null || { echo "git trees rm: not in a git repo" >&2; return 1; }
 
   if git show-ref --verify --quiet "refs/heads/$target"; then
     br="$target"
     path=$(_path_for "$br")
   elif [ -d "$target" ]; then
-    path=$(cd "$target" 2>/dev/null && pwd)
+    # `pwd -P`, not `pwd`: git records worktrees by their physical path, so a
+    # logical one (macOS /var -> /private/var, or any symlinked parent) would
+    # match neither _branch_at nor the registration check below.
+    path=$(cd "$target" 2>/dev/null && pwd -P)
     br=$(_branch_at "$path")
+    # A path target must be a worktree git knows about. `git worktree remove`
+    # would refuse anything else on its own, but TREES_RM_CMD does not — with
+    # `rm -rf` set, `rm .` in the container root would take out the bare store.
+    # Gate on registration, not on $br: a detached-HEAD worktree has no branch.
+    if ! git worktree list --porcelain | grep -qxF "worktree $path"; then
+      echo "git trees rm: '$target' is not a worktree" >&2
+      return 1
+    fi
   else
     echo "git trees rm: target '$target' not found" >&2
     return 1
@@ -653,7 +668,7 @@ cmd_rm() {
 # --- clean -------------------------------------------------------------------
 
 cmd_clean() {
-  local apply=0 do_gone=0 do_merged=0 root def br p
+  local apply=0 do_gone=0 do_merged=0 def br p failed=0
 
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -669,7 +684,7 @@ cmd_clean() {
     do_merged=1
   fi
 
-  root=$(_root) || { echo "git trees clean: not in a git repo" >&2; return 1; }
+  _root >/dev/null || { echo "git trees clean: not in a git repo" >&2; return 1; }
   def=$(_default_branch)
   git fetch --prune origin >/dev/null 2>&1 || true
 
@@ -683,12 +698,13 @@ cmd_clean() {
         if [ -n "$p" ]; then
           if ! _remove_worktree "$p"; then
             echo "    ! worktree remove failed — skipped branch delete for $br" >&2
+            failed=1
             continue
           fi
           git worktree prune >/dev/null 2>&1
         fi
         git branch -d "$br" 2>/dev/null || git branch -D "$br" 2>/dev/null \
-          || echo "    ! could not delete branch $br" >&2
+          || { echo "    ! could not delete branch $br" >&2; failed=1; }
       fi
     done < <(
       git for-each-ref --format='%(refname:short) %(upstream:track)' refs/heads \
@@ -708,12 +724,13 @@ cmd_clean() {
           if [ -n "$p" ]; then
             if ! _remove_worktree "$p"; then
               echo "    ! worktree remove failed — skipped branch delete for $br" >&2
+              failed=1
               continue
             fi
             git worktree prune >/dev/null 2>&1
           fi
           git branch -d "$br" 2>/dev/null || git branch -D "$br" 2>/dev/null \
-            || echo "    ! could not delete branch $br" >&2
+            || { echo "    ! could not delete branch $br" >&2; failed=1; }
         fi
       fi
     done < <(git for-each-ref --format='%(refname:short)' refs/heads)
@@ -721,7 +738,9 @@ cmd_clean() {
 
   git worktree prune >/dev/null 2>&1
   [ "$apply" -eq 0 ] && echo "(report only — pass --apply to execute)"
-  return 0
+  # Nonzero when any removal failed, so `clean --apply` can be scripted. The
+  # loops keep going on failure, so this reports partial success, not a stop.
+  return "$failed"
 }
 
 

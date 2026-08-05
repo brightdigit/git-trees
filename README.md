@@ -261,6 +261,15 @@ By default (without `--apply`), reports what would be removed without making any
 
 Worktree directories are removed via `TREES_RM_CMD` if configured, or `git worktree remove`. Local branches are deleted using `git branch -d` (falling back to `git branch -D` if needed).
 
+A path target must be a worktree git already knows about; `rm` refuses any other
+directory.
+
+> **`TREES_RM_CMD` removes git's safety net.** `git worktree remove` refuses a
+> worktree that has uncommitted changes or untracked files. A custom command such
+> as `rm -rf` receives only the path and makes no such check, so `rm --apply` and
+> `clean --apply` will destroy uncommitted work without warning. Set it only if
+> you want `git worktree remove --force` semantics deliberately.
+
 
 ### `git trees clean [--merged|--gone] [--apply]`
 
@@ -272,7 +281,10 @@ Selectors:
 
 Passing neither selector runs both `--gone` and `--merged`.
 
-By default (without `--apply`), `clean` operates in dry-run mode and prints matching branches/worktrees without deleting them. Pass `--apply` to execute removals. Worktree directories are removed via `TREES_RM_CMD` if set (defaulting to `git worktree remove`), and branches are deleted using `git branch -d` (falling back to `git branch -D` for gone/squash-merged branches).
+By default (without `--apply`), `clean` operates in dry-run mode and prints matching branches/worktrees without deleting them. Pass `--apply` to execute removals. Worktree directories are removed via `TREES_RM_CMD` if set (defaulting to `git worktree remove`) — see the warning above — and branches are deleted using `git branch -d` (falling back to `git branch -D` for gone/squash-merged branches).
+
+`clean --apply` keeps going when an individual removal fails, reporting each one
+on stderr, and exits nonzero if any of them did.
 
 
 
@@ -285,7 +297,13 @@ git trees rm feature-x --apply            # remove a single worktree and its bra
 git trees clean --apply                   # remove merged and gone branches/worktrees
 ```
 
-Both subcommands default to dry-run mode (report only) unless `--apply` is passed. Alternatively, you can use plain git:
+Both subcommands default to dry-run mode (report only) unless `--apply` is passed.
+Both also delete unmerged work once `--apply` is given — `-d` escalates to `-D`.
+If you have set `TREES_RM_CMD`, read the warning under [`git trees
+rm`](#git-trees-rm-branchpath---apply) first: it removes git's check for
+uncommitted changes.
+
+Alternatively, you can use plain git:
 
 ```bash
 git worktree remove <path>
@@ -301,7 +319,7 @@ git worktree prune
 | `TREES_ORG` | *(unset)* | Default org; if unset, bare repo names are rejected |
 | `TREES_AGENTS_TEMPLATE` | `~/.config/git-trees/AGENTS.md` | Seeded at the container root by `init` (and `root --agents`) |
 | `TREES_NO_PUSH` | *(unset)* | Any non-empty value: `add`/`track` never create a branch on `origin` |
-| `TREES_RM_CMD` | *(unset)* | Custom command for worktree directory removal (defaults to `git worktree remove`) |
+| `TREES_RM_CMD` | *(unset)* | Custom command for worktree directory removal (defaults to `git worktree remove`). Bypasses git's uncommitted-work check — see [`git trees rm`](#git-trees-rm-branchpath---apply) |
 
 ## Shell wrapper (optional)
 
