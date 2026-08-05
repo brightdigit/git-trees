@@ -19,3 +19,4 @@ update or remove the stale line rather than leaving both.
 - Do not remove an `init` container on agent-seeding failure; return nonzero and leave the directory.
 - `main` is always the stable release; README curl install pins `main` (not version tags). Do not describe `main` as a development/moving target.
 - `clean` supports `--gone` and `--merged` (detecting direct, rebased, and squash-merged PRs); `--older-than` is omitted.
+- When resolving CodeRabbit review comments, verify each claim against the code before acting; report skipped findings with the reason rather than silently dropping them.

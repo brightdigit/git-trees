@@ -81,6 +81,15 @@ created from `origin/main` silently gets `origin/main` as its upstream and will
 push there. The new-branch path must pass `--no-track`, then let `cmd_track` set
 the correct upstream. Live in `cmd_add`; any change there needs a fresh test.
 
+## Git pitfall: worktree paths are physical
+
+`git worktree list` reports the *physical* path. Resolve any user-supplied
+directory with `pwd -P`, never plain `pwd`, before comparing against it or
+passing it to `_branch_at` — on macOS `$TMPDIR` lives under `/var`, a symlink to
+`/private/var`, so the logical path matches nothing and a real worktree looks
+unregistered. `cmd_rm`'s path arm depends on this; the smoke suite catches it
+because its fixtures are built under `mktemp -d`.
+
 ## Testing
 
 Run the suite:
