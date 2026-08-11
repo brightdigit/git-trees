@@ -1,3 +1,5 @@
+<img src="logo.svg" height="250" alt="git-trees logo">
+
 # git-trees
 
 A `git` subcommand for managing a **bare repo + worktrees** layout. Pure git — no
