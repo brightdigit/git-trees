@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.0.2
+
+## What's Changed
+
+* Introduce `rm` and `clean` subcommands by @leogdion in https://github.com/brightdigit/git-trees/pull/47
+* Adding logo for git-trees by @leogdion in https://github.com/brightdigit/git-trees/pull/52
+
+**Full Changelog**: https://github.com/brightdigit/git-trees/compare/v1.0.1...v1.0.2
+
 ## v1.0.1
 
 ## What's Changed
