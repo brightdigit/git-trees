@@ -8,12 +8,15 @@
 #   git trees add <branch> [base] [--print-path] [--no-push]
 #   git trees track [path] [--no-push]
 #   git trees list [--json]            (alias: ls)
+#   git trees rm <branch|path> [--apply]
+#   git trees clean [--merged|--gone] [--apply]
 #
 # Env (all optional):
 #   TREES_HOST             default host for init (default: github.com)
 #   TREES_ORG              default org; if unset, bare repo names are rejected
 #   TREES_AGENTS_TEMPLATE  AGENTS.md seeded at the container root
 #   TREES_NO_PUSH          non-empty: never create a branch on origin
+#   TREES_RM_CMD           custom command for worktree directory removal
 
 set -uo pipefail
 
@@ -21,10 +24,74 @@ set -uo pipefail
 : "${TREES_ORG:=}"
 : "${TREES_AGENTS_TEMPLATE:=$HOME/.config/git-trees/AGENTS.md}"
 : "${TREES_NO_PUSH:=}"
+: "${TREES_RM_CMD:=}"
+
 
 # --- internals ---------------------------------------------------------------
 
+_remove_worktree() {
+  local path="$1"
+  if [ -n "$TREES_RM_CMD" ]; then
+    # Unquoted on purpose: TREES_RM_CMD carries its own arguments ("rm -rf"),
+    # so it must word-split. "$path" stays quoted.
+    $TREES_RM_CMD "$path"
+  else
+    git worktree remove "$path"
+  fi
+}
+
+_is_branch_merged() {   # _is_branch_merged <branch> <default_branch> -> 0 if merged, 1 if not
+  local br="$1" def="$2" mb br_tree patch_id br_commit
+
+  br_commit=$(git rev-parse "$br" 2>/dev/null) || return 1
+  mb=$(git merge-base "origin/$def" "$br" 2>/dev/null) || return 1
+
+  # 1. Direct merge check: br is an ancestor of origin/$def AND br is not identical to origin/$def tip.
+  # Comparing against $mb would be dead code — once br is an ancestor, the merge base *is* br.
+  # A zero-commit branch sitting on an older origin/$def commit is merged by this rule; only a
+  # branch still at the tip (a freshly cut one) is spared, which is the case worth protecting.
+  if git merge-base --is-ancestor "$br" "origin/$def" 2>/dev/null; then
+    if [ "$br_commit" != "$(git rev-parse "origin/$def" 2>/dev/null)" ]; then
+      return 0
+    fi
+  fi
+
+  # 2. Rebase / Cherry-pick check (git cherry has no '+' lines)
+  if git rev-parse --verify --quiet "origin/$def" >/dev/null; then
+    # `|| echo 0`: rev-list prints nothing when it fails, and `[ "" -gt 0 ]` would
+    # leak a raw "integer expression expected" from bash to the user's terminal.
+    if [ "$(git rev-list --count "$mb..$br" 2>/dev/null || echo 0)" -gt 0 ]; then
+      if ! git cherry "origin/$def" "$br" 2>/dev/null | grep -q '^+'; then
+        return 0
+      fi
+    fi
+  fi
+
+  # 3. Squash-merge tree match (branch tree exists in origin/$def history)
+  br_tree=$(git rev-parse "$br^{tree}" 2>/dev/null)
+  if [ -n "$br_tree" ] && git log -n 100 --format='%T' "origin/$def" 2>/dev/null | grep -qx "$br_tree"; then
+    if [ "$(git rev-list --count "$mb..$br" 2>/dev/null || echo 0)" -gt 0 ]; then
+      return 0
+    fi
+  fi
+
+  # 4. Squash-merge patch-id match
+  patch_id=$(git diff "$mb..$br" 2>/dev/null | git patch-id | awk '{print $1}')
+  if [ -n "$patch_id" ]; then
+    # Same 100-commit window as the tree check above. Unbounded, this renders every
+    # patch since the merge base — once per candidate branch, on every `clean`.
+    if git log -p -n 100 "$mb..origin/$def" 2>/dev/null | git patch-id | awk '{print $1}' | grep -qx "$patch_id"; then
+      return 0
+    fi
+  fi
+
+  return 1
+}
+
+
+
 _root() {
+
   local common
   common=$(git rev-parse --git-common-dir 2>/dev/null) || return 1
   cd "$(dirname "$common")" 2>/dev/null && pwd
@@ -524,6 +591,165 @@ cmd_list() {
   fi
 }
 
+# --- rm ----------------------------------------------------------------------
+
+cmd_rm() {
+  local target="" apply=0 br="" path="" failed=0
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --apply) apply=1; shift ;;
+      -*) echo "git trees rm: unknown option $1" >&2; return 1 ;;
+      *)
+        if [ -z "$target" ]; then target="$1"; shift
+        else echo "git trees rm: unexpected argument $1" >&2; return 1
+        fi ;;
+    esac
+  done
+
+  [ -z "$target" ] && {
+    echo "usage: git trees rm <branch|path> [--apply]" >&2
+    return 1
+  }
+
+  _root >/dev/null || { echo "git trees rm: not in a git repo" >&2; return 1; }
+
+  if git show-ref --verify --quiet "refs/heads/$target"; then
+    br="$target"
+    path=$(_path_for "$br")
+  elif [ -d "$target" ]; then
+    # `pwd -P`, not `pwd`: git records worktrees by their physical path, so a
+    # logical one (macOS /var -> /private/var, or any symlinked parent) would
+    # match neither _branch_at nor the registration check below.
+    path=$(cd "$target" 2>/dev/null && pwd -P)
+    br=$(_branch_at "$path")
+    # A path target must be a worktree git knows about. `git worktree remove`
+    # would refuse anything else on its own, but TREES_RM_CMD does not — with
+    # `rm -rf` set, `rm .` in the container root would take out the bare store.
+    # Gate on registration, not on $br: a detached-HEAD worktree has no branch.
+    if ! git worktree list --porcelain | grep -qxF "worktree $path"; then
+      echo "git trees rm: '$target' is not a worktree" >&2
+      return 1
+    fi
+  else
+    echo "git trees rm: target '$target' not found" >&2
+    return 1
+  fi
+
+  if [ -z "$br" ] && [ -z "$path" ]; then
+    echo "git trees rm: target '$target' not found" >&2
+    return 1
+  fi
+
+  if [ "$apply" -eq 0 ]; then
+    [ -n "$path" ] && echo "Would remove worktree: $path"
+    [ -n "$br" ] && echo "Would delete branch: $br"
+    echo "(report only — pass --apply to execute)"
+    return 0
+  fi
+
+  if [ -n "$path" ]; then
+    if ! _remove_worktree "$path"; then
+      echo "git trees rm: worktree removal failed for $path" >&2
+      failed=1
+    else
+      git worktree prune >/dev/null 2>&1
+    fi
+  fi
+
+  # Skip branch delete when the worktree is still present — same as clean.
+  if [ -n "$br" ] && [ "$failed" -eq 0 ]; then
+    if ! { git branch -d "$br" 2>/dev/null || git branch -D "$br" 2>/dev/null; }; then
+      echo "git trees rm: could not delete branch $br" >&2
+      failed=1
+    fi
+  fi
+
+  git worktree prune >/dev/null 2>&1
+  return "$failed"
+}
+
+
+# --- clean -------------------------------------------------------------------
+
+cmd_clean() {
+  local apply=0 do_gone=0 do_merged=0 def br p failed=0
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --gone)   do_gone=1; shift ;;
+      --merged) do_merged=1; shift ;;
+      --apply)  apply=1; shift ;;
+      *) echo "git trees clean: unknown option $1" >&2; return 1 ;;
+    esac
+  done
+
+  if [ "$do_gone" -eq 0 ] && [ "$do_merged" -eq 0 ]; then
+    do_gone=1
+    do_merged=1
+  fi
+
+  _root >/dev/null || { echo "git trees clean: not in a git repo" >&2; return 1; }
+  def=$(_default_branch)
+  git fetch --prune origin >/dev/null 2>&1 || true
+
+  if [ "$do_gone" -eq 1 ]; then
+    echo "== branches with gone upstream =="
+    while read -r br; do
+      [ -z "$br" ] && continue
+      p=$(_path_for "$br")
+      echo "  $br${p:+  ($p)}"
+      if [ "$apply" -eq 1 ]; then
+        if [ -n "$p" ]; then
+          if ! _remove_worktree "$p"; then
+            echo "    ! worktree remove failed — skipped branch delete for $br" >&2
+            failed=1
+            continue
+          fi
+          git worktree prune >/dev/null 2>&1
+        fi
+        git branch -d "$br" 2>/dev/null || git branch -D "$br" 2>/dev/null \
+          || { echo "    ! could not delete branch $br" >&2; failed=1; }
+      fi
+    done < <(
+      git for-each-ref --format='%(refname:short) %(upstream:track)' refs/heads \
+        | grep '\[gone\]' | awk '{print $1}'
+    )
+  fi
+
+  if [ "$do_merged" -eq 1 ]; then
+    echo "== branches merged into $def =="
+    while read -r br; do
+      [ -z "$br" ] && continue
+      [ "$br" = "$def" ] && continue
+      if _is_branch_merged "$br" "$def"; then
+        p=$(_path_for "$br")
+        echo "  $br${p:+  ($p)}"
+        if [ "$apply" -eq 1 ]; then
+          if [ -n "$p" ]; then
+            if ! _remove_worktree "$p"; then
+              echo "    ! worktree remove failed — skipped branch delete for $br" >&2
+              failed=1
+              continue
+            fi
+            git worktree prune >/dev/null 2>&1
+          fi
+          git branch -d "$br" 2>/dev/null || git branch -D "$br" 2>/dev/null \
+            || { echo "    ! could not delete branch $br" >&2; failed=1; }
+        fi
+      fi
+    done < <(git for-each-ref --format='%(refname:short)' refs/heads)
+  fi
+
+  git worktree prune >/dev/null 2>&1
+  [ "$apply" -eq 0 ] && echo "(report only — pass --apply to execute)"
+  # Nonzero when any removal failed, so `clean --apply` can be scripted. The
+  # loops keep going on failure, so this reports partial success, not a stop.
+  return "$failed"
+}
+
+
+
 # --- usage / dispatch --------------------------------------------------------
 
 usage() {
@@ -536,12 +762,16 @@ usage: git trees <command> [args]
                                               create a worktree (sets upstream)
   track [path] [--no-push]                    ensure branch has an upstream
   list [--json]                               worktrees + branches without one
+  rm <branch|path> [--apply]                  remove worktree and delete branch
+  clean [--merged|--gone] [--apply]           report/remove merged or gone branches
+
+
 
 note: a branch that does not exist on origin is created there by `add`/`track`
   via `git push -u origin HEAD`. Pass --no-push (or set TREES_NO_PUSH) to skip
   that and leave the upstream unset.
 
-env (optional): TREES_ORG, TREES_HOST, TREES_AGENTS_TEMPLATE, TREES_NO_PUSH
+env (optional): TREES_ORG, TREES_HOST, TREES_AGENTS_TEMPLATE, TREES_NO_PUSH, TREES_RM_CMD
   — see README
 
 note: `add` prints the worktree path but cannot cd your shell. For that:
@@ -564,6 +794,8 @@ main() {
     add)       cmd_add   "$@" ;;
     track)     cmd_track "$@" ;;
     list|ls)   cmd_list  "$@" ;;
+    rm)        cmd_rm    "$@" ;;
+    clean)     cmd_clean "$@" ;;
     help|--help|-h) usage; return 0 ;;
     *) echo "git trees: unknown command '$cmd'" >&2; usage; return 1 ;;
   esac

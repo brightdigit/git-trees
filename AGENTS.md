@@ -48,10 +48,23 @@ consequence is that `feature/x` and `feature-x` compete for one directory;
 the directory (`_branch_at`). Do not "fix" that by inventing a suffixed variant:
 a directory whose name the user cannot predict is worse than an error.
 
-**Nothing destructive.** No subcommand removes a worktree or deletes a branch.
-Anything that destroys user data must report by default and act only under an
-explicit `--apply`, must use `git branch -d` and never `-D`, and must route
-directory removal through a user-configurable command.
+**Nothing destructive without `--apply`.** `rm` and `clean` report by default and modify state only when `--apply` is explicitly passed. Local branch deletions use `git branch -d` (falling back to `-D` on `clean` once confirmed gone/merged, or on `rm` when `--apply` is passed), and worktree directory removals route through `TREES_RM_CMD` when configured (defaulting to `git worktree remove`).
+
+**`TREES_RM_CMD` is the one place the safety net comes off.** `git worktree
+remove` refuses a worktree with uncommitted changes or untracked files; a custom
+command gets the path and nothing else. So a path target must be validated
+against `git worktree list` before removal — `cmd_rm`'s path arm does this, and
+without it `TREES_RM_CMD="rm -rf" git trees rm . --apply` would delete the
+container root and the bare store. Keep the gate on worktree registration rather
+than on the resolved branch: a detached-HEAD worktree legitimately has none.
+
+**`clean --apply` reports partial failure.** Its loops continue past a failed
+worktree removal or branch delete, but the exit status is nonzero if any failed,
+matching `cmd_rm`. Do not turn that back into an unconditional `return 0` —
+scripting `clean` depends on it.
+
+
+
 
 **`track` only ever sets `origin/<branch>`.** Same remote, same name. There is
 no flag for an arbitrary upstream, and `origin` is hardcoded throughout —
@@ -67,6 +80,15 @@ unconditionally, and would otherwise overwrite what the user asked for.
 created from `origin/main` silently gets `origin/main` as its upstream and will
 push there. The new-branch path must pass `--no-track`, then let `cmd_track` set
 the correct upstream. Live in `cmd_add`; any change there needs a fresh test.
+
+## Git pitfall: worktree paths are physical
+
+`git worktree list` reports the *physical* path. Resolve any user-supplied
+directory with `pwd -P`, never plain `pwd`, before comparing against it or
+passing it to `_branch_at` — on macOS `$TMPDIR` lives under `/var`, a symlink to
+`/private/var`, so the logical path matches nothing and a real worktree looks
+unregistered. `cmd_rm`'s path arm depends on this; the smoke suite catches it
+because its fixtures are built under `mktemp -d`.
 
 ## Testing
 
@@ -118,6 +140,16 @@ What the suite covers:
 - **install.sh** — places the binary; seeds `~/.config/git-trees/AGENTS.md` from
   the template under a redirected `HOME`; does not overwrite an existing config
   file
+- **rm** — dry run vs `--apply`, worktree removal by branch and by path (a
+  slugged directory whose name is not a branch name, so the path arm is the one
+  that runs), `-d` escalating to `-D` so an unmerged branch is still deleted
+  under `--apply`, refusal of a directory that is not a registered worktree even
+  with `TREES_RM_CMD` set, and custom `TREES_RM_CMD` routing
+- **clean** — `--gone` identification and deletion, `--merged` identification
+  across direct merges, rebased commits, and squash-merged PRs, zero-commit
+  fresh branch preservation, dry run vs `--apply`, worktree directories actually
+  gone after `--apply`, each selector run on its own, and custom `TREES_RM_CMD`
+  routing
 
 Two assertion shapes are easy to get wrong:
 
