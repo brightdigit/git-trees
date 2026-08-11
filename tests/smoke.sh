@@ -651,6 +651,16 @@ assert_ok "clean --gone with TREES_RM_CMD" \
 assert_fail "clean routed removal through TREES_RM_CMD" test -e clean-custom
 assert_fail "clean deleted the gone branch" git show-ref --verify --quiet refs/heads/clean-custom
 
+# Partial failure: remover fails, branch delete is skipped, exit is nonzero.
+assert_ok "add clean-fail-a" bash "$T" add clean-fail-a
+assert_ok "delete clean-fail-a on origin" git -C "$ORIGIN" branch -D clean-fail-a
+assert_fail "clean --apply exits nonzero after a failed removal" \
+  env TREES_RM_CMD="false" bash "$T" clean --gone --apply
+assert_ok "branch kept when its worktree removal failed" \
+  git show-ref --verify --quiet refs/heads/clean-fail-a
+assert_ok "cleanup clean-fail-a after partial-failure case" \
+  env TREES_RM_CMD="rm -rf" bash "$T" rm clean-fail-a --apply
+
 # Cleanup fresh-branch
 bash "$T" rm fresh-branch --apply >/dev/null 2>&1
 

@@ -257,7 +257,7 @@ shown with path `(none)`. `--json` emits the same fields as an array.
 
 ### `git trees rm <branch|path> [--apply]`
 
-Removes a worktree and deletes its branch. Accepts either a branch name or a worktree path.
+Removes a worktree and deletes its associated local branch when one exists. Accepts either a branch name or a worktree path.
 
 By default (without `--apply`), reports what would be removed without making any changes. Pass `--apply` to perform the removal.
 

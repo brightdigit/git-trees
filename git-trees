@@ -32,6 +32,8 @@ set -uo pipefail
 _remove_worktree() {
   local path="$1"
   if [ -n "$TREES_RM_CMD" ]; then
+    # Unquoted on purpose: TREES_RM_CMD carries its own arguments ("rm -rf"),
+    # so it must word-split. "$path" stays quoted.
     $TREES_RM_CMD "$path"
   else
     git worktree remove "$path"
@@ -592,7 +594,7 @@ cmd_list() {
 # --- rm ----------------------------------------------------------------------
 
 cmd_rm() {
-  local target="" apply=0 br="" path=""
+  local target="" apply=0 br="" path="" failed=0
 
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -649,19 +651,22 @@ cmd_rm() {
   if [ -n "$path" ]; then
     if ! _remove_worktree "$path"; then
       echo "git trees rm: worktree removal failed for $path" >&2
-      return 1
+      failed=1
+    else
+      git worktree prune >/dev/null 2>&1
     fi
-    git worktree prune >/dev/null 2>&1
   fi
 
-  if [ -n "$br" ]; then
+  # Skip branch delete when the worktree is still present — same as clean.
+  if [ -n "$br" ] && [ "$failed" -eq 0 ]; then
     if ! { git branch -d "$br" 2>/dev/null || git branch -D "$br" 2>/dev/null; }; then
       echo "git trees rm: could not delete branch $br" >&2
+      failed=1
     fi
   fi
 
   git worktree prune >/dev/null 2>&1
-  return 0
+  return "$failed"
 }
 
 
