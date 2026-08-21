@@ -487,6 +487,180 @@ assert_eq "install.sh rerun exits 0" "$rc" "0"
 assert_eq "install.sh does not overwrite an existing template" \
   "$(cat "$IHOME/.config/git-trees/AGENTS.md")" "CUSTOM"
 
+# TREES_DEST is the piped path's only way to choose a destination, but it must
+# work from a clone too, and the positional must still win over it.
+EDEST="$TMP/install-envdest"
+out=$(HOME="$IHOME" TREES_DEST="$EDEST" bash "$REPO/install.sh" 2>&1)
+rc=$?
+assert_eq "install.sh TREES_DEST exits 0" "$rc" "0"
+assert_ok "install.sh honours TREES_DEST" test -x "$EDEST/git-trees"
+PDEST="$TMP/install-posdest"
+HOME="$IHOME" TREES_DEST="$EDEST" bash "$REPO/install.sh" "$PDEST" >/dev/null 2>&1
+assert_ok "install.sh positional beats TREES_DEST" test -x "$PDEST/git-trees"
+
+# --- install.sh — no-repo bootstrap (the `curl | bash` path) -----------------
+#
+# The script is copied somewhere with no git-trees beside it, so it takes the
+# download branch. TREES_BASE_URL points at a file:// fixture: the real fetch
+# code runs, no network is touched, and the test cannot silently no-op offline.
+
+section "install.sh — no-repo bootstrap"
+SERVE="$TMP/serve"
+mkdir -p "$SERVE"
+cp "$REPO/git-trees" "$SERVE/git-trees"
+cp "$REPO/AGENTS.md.template" "$SERVE/AGENTS.md.template"
+BOOT="$TMP/boot"
+mkdir -p "$BOOT"
+cp "$REPO/install.sh" "$BOOT/install.sh"
+
+BHOME="$TMP/boot-home"
+BDEST="$TMP/boot-bin"
+mkdir -p "$BHOME"
+out=$(HOME="$BHOME" TREES_DEST="$BDEST" TREES_BASE_URL="file://$SERVE" \
+  bash "$BOOT/install.sh" 2>&1)
+rc=$?
+assert_eq "bootstrap exits 0" "$rc" "0"
+assert_contains "bootstrap announces the download" "$out" "downloading git-trees"
+assert_ok "bootstrap placed the binary" test -x "$BDEST/git-trees"
+assert_eq "bootstrap binary matches the source" \
+  "$(cat "$BDEST/git-trees")" "$(cat "$REPO/git-trees")"
+assert_ok "bootstrap binary runs" bash "$BDEST/git-trees" help
+assert_ok "bootstrap seeded the agents template" \
+  test -f "$BHOME/.config/git-trees/AGENTS.md"
+assert_eq "bootstrap template matches AGENTS.md.template" \
+  "$(cat "$BHOME/.config/git-trees/AGENTS.md")" "$(cat "$REPO/AGENTS.md.template")"
+
+# A rerun must not clobber a template the user has edited.
+echo BOOTCUSTOM > "$BHOME/.config/git-trees/AGENTS.md"
+HOME="$BHOME" TREES_DEST="$BDEST" TREES_BASE_URL="file://$SERVE" \
+  bash "$BOOT/install.sh" >/dev/null 2>&1
+rc=$?
+assert_eq "bootstrap rerun exits 0" "$rc" "0"
+assert_eq "bootstrap rerun does not overwrite the template" \
+  "$(cat "$BHOME/.config/git-trees/AGENTS.md")" "BOOTCUSTOM"
+
+# The temp download directory is trapped away on exit. A private TMPDIR makes
+# that observable: mktemp -d lands inside it, so anything left is a leak.
+SCRATCH="$TMP/boot-tmpdir"
+mkdir -p "$SCRATCH"
+HOME="$BHOME" TMPDIR="$SCRATCH" TREES_DEST="$BDEST" TREES_BASE_URL="file://$SERVE" \
+  bash "$BOOT/install.sh" >/dev/null 2>&1
+assert_eq "bootstrap cleans up its temp dir" \
+  "$(find "$SCRATCH" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')" "0"
+
+# A missing git-trees at the base URL must fail loudly, not install nothing
+# quietly. `curl -fsSL` fails on HTTP errors; file:// fails on a missing path.
+EMPTY="$TMP/serve-empty"
+mkdir -p "$EMPTY"
+FHOME="$TMP/boot-fail-home"
+FDEST="$TMP/boot-fail-bin"
+mkdir -p "$FHOME"
+out=$(HOME="$FHOME" TREES_DEST="$FDEST" TREES_BASE_URL="file://$EMPTY" \
+  bash "$BOOT/install.sh" 2>&1)
+rc=$?
+assert_eq "bootstrap fails when git-trees is missing" "$rc" "1"
+assert_contains "bootstrap says why it failed" "$out" "failed to download git-trees"
+assert_fail "bootstrap installed nothing on failure" test -e "$FDEST/git-trees"
+
+# The actual `curl ... | bash` shape: piped on stdin, from a directory with no
+# git-trees in it. Piped bash has no BASH_SOURCE and no $1, and `set -u` makes a
+# bare reference to either fatal — a copied-file test cannot catch that.
+PHOME="$TMP/boot-piped-home"
+PPDEST="$TMP/boot-piped-bin"
+mkdir -p "$PHOME" "$TMP/boot-piped-cwd"
+out=$(in_dir "$TMP/boot-piped-cwd" env HOME="$PHOME" TREES_DEST="$PPDEST" \
+  TREES_BASE_URL="file://$SERVE" bash < "$BOOT/install.sh" 2>&1)
+rc=$?
+assert_eq "piped bootstrap exits 0" "$rc" "0"
+assert_not_contains "piped bootstrap has no unbound-variable error" \
+  "$out" "unbound variable"
+assert_ok "piped bootstrap placed the binary" test -x "$PPDEST/git-trees"
+assert_ok "piped bootstrap seeded the template" \
+  test -f "$PHOME/.config/git-trees/AGENTS.md"
+
+# The wget fallback and the neither-downloader error, on a PATH built to contain
+# exactly what each case needs. macOS ships /usr/bin/curl, so proving the
+# fallback runs at all means excluding the real curl from PATH.
+STUBBIN="$TMP/stub-bin"
+mkdir -p "$STUBBIN"
+for c in bash mkdir install cp mktemp rm cat dirname pwd sed find chmod wc tr; do
+  cbin=$(command -v "$c") && ln -sf "$cbin" "$STUBBIN/$c"
+done
+
+WHOME="$TMP/boot-wget-home"
+WDEST="$TMP/boot-wget-bin"
+mkdir -p "$WHOME"
+out=$(env -i HOME="$WHOME" PATH="$STUBBIN" TREES_DEST="$WDEST" \
+  TREES_BASE_URL="file://$SERVE" "$STUBBIN/bash" "$BOOT/install.sh" 2>&1)
+rc=$?
+assert_eq "bootstrap fails with neither curl nor wget" "$rc" "1"
+assert_contains "bootstrap names the missing tools" "$out" "need curl or wget"
+assert_fail "bootstrap installed nothing without a downloader" \
+  test -e "$WDEST/git-trees"
+
+# Minimal wget standing in for the real thing: only the -qO form install.sh
+# uses, over file://. Exits nonzero on a missing source, as wget does.
+cat > "$STUBBIN/wget" <<'WGET_STUB'
+#!/usr/bin/env bash
+out=""; url=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -qO) out="$2"; shift 2 ;;
+    -q) shift ;;
+    *) url="$1"; shift ;;
+  esac
+done
+src="${url#file://}"
+[ -f "$src" ] || exit 8
+cat "$src" > "$out"
+WGET_STUB
+chmod +x "$STUBBIN/wget"
+
+out=$(env -i HOME="$WHOME" PATH="$STUBBIN" TREES_DEST="$WDEST" \
+  TREES_BASE_URL="file://$SERVE" "$STUBBIN/bash" "$BOOT/install.sh" 2>&1)
+rc=$?
+assert_eq "bootstrap via wget exits 0" "$rc" "0"
+assert_ok "bootstrap via wget placed the binary" test -x "$WDEST/git-trees"
+assert_eq "bootstrap via wget binary matches the source" \
+  "$(cat "$WDEST/git-trees")" "$(cat "$REPO/git-trees")"
+assert_ok "bootstrap via wget seeded the template" \
+  test -f "$WHOME/.config/git-trees/AGENTS.md"
+
+# A zero-byte body is the truncated-download case: curl succeeds (the transfer
+# completed), so only the non-empty check catches it. Installing an empty
+# git-trees onto PATH is the worst outcome here, hence its own fixture.
+TRUNC="$TMP/serve-truncated"
+mkdir -p "$TRUNC"
+: > "$TRUNC/git-trees"
+cp "$REPO/AGENTS.md.template" "$TRUNC/AGENTS.md.template"
+THOME="$TMP/boot-trunc-home"
+TDEST="$TMP/boot-trunc-bin"
+mkdir -p "$THOME"
+out=$(HOME="$THOME" TREES_DEST="$TDEST" TREES_BASE_URL="file://$TRUNC" \
+  bash "$BOOT/install.sh" 2>&1)
+rc=$?
+assert_eq "bootstrap rejects a zero-byte download" "$rc" "1"
+assert_contains "bootstrap says why the empty download failed" \
+  "$out" "failed to download git-trees"
+assert_fail "bootstrap installed nothing from a zero-byte download" \
+  test -e "$TDEST/git-trees"
+
+# A present script with a missing template warns and still installs the binary.
+ONLY="$TMP/serve-binary-only"
+mkdir -p "$ONLY"
+cp "$REPO/git-trees" "$ONLY/git-trees"
+NHOME="$TMP/boot-notmpl-home"
+NDEST="$TMP/boot-notmpl-bin"
+mkdir -p "$NHOME"
+out=$(HOME="$NHOME" TREES_DEST="$NDEST" TREES_BASE_URL="file://$ONLY" \
+  bash "$BOOT/install.sh" 2>&1)
+rc=$?
+assert_eq "bootstrap without a template exits 0" "$rc" "0"
+assert_ok "bootstrap without a template still installs" test -x "$NDEST/git-trees"
+assert_contains "bootstrap warns about the missing template" "$out" "AGENTS.md.template"
+assert_fail "bootstrap wrote no config template" \
+  test -e "$NHOME/.config/git-trees/AGENTS.md"
+
 # --- rm ----------------------------------------------------------------------
 
 section "rm"
