@@ -139,6 +139,26 @@ _default_branch() {
   echo main
 }
 
+# _base_sha <ref> -> commit sha of <ref>, or nonzero
+#
+# `git worktree add -b <new> <dir> <base>` DWIMs a base that names a branch
+# existing only on the remote: it creates a local branch named <base> tracking
+# it and overrides the explicit `-b <new>` entirely, so the worktree lands on
+# the wrong branch, <new> is never created, and the command exits 0. `--no-track`
+# does not prevent it — that flag governs the upstream, not the branch name.
+# Resolving the base to a sha first leaves nothing for the DWIM to latch onto,
+# and creates no stray local ref that would later go stale as origin advances.
+#
+# A bare remote-only name is not resolvable as a commit-ish, so it is retried
+# against `origin/` — the branch the user meant.
+_base_sha() {
+  local sha
+  sha=$(git rev-parse --verify --quiet "$1^{commit}") && { printf '%s\n' "$sha"; return 0; }
+  sha=$(git rev-parse --verify --quiet "refs/remotes/origin/$1^{commit}") \
+    && { printf '%s\n' "$sha"; return 0; }
+  return 1
+}
+
 _ref_info() {   # _ref_info <branch> -> upstream|track|date
   git for-each-ref --format='%(upstream:short)|%(upstream:track)|%(committerdate:short)' \
     "refs/heads/$1"
@@ -377,7 +397,7 @@ cmd_root() {
 # --- add ---------------------------------------------------------------------
 
 cmd_add() {
-  local br="" base="" print_path=0 no_push=0 root path dir owner
+  local br="" base="" print_path=0 no_push=0 root path dir owner base_sha created
 
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -449,9 +469,27 @@ cmd_add() {
     git worktree add --track -b "$br" "$dir" "origin/$br" >&2 || return 1
   else
     : "${base:=origin/$(_default_branch)}"
+    # A sha, never the base name: see _base_sha for the wrong-branch DWIM this
+    # avoids. Resolving here also turns a bogus base into a clear error instead
+    # of a worktree on something the user did not ask for.
+    base_sha=$(_base_sha "$base") || {
+      echo "git trees add: base '$base' is not a valid commit" >&2
+      return 1
+    }
     # --no-track: a new branch must not inherit the base ref's upstream,
     # or it would silently push to the base branch.
-    git worktree add --no-track -b "$br" "$dir" "$base" >&2 || return 1
+    git worktree add --no-track -b "$br" "$dir" "$base_sha" >&2 || return 1
+  fi
+
+  # Belt and braces against a future DWIM: `add` must never leave a worktree
+  # checked out on a branch other than the one asked for, silently or otherwise.
+  # Asked of the worktree itself, not `git worktree list`: that reports physical
+  # paths, and $dir is built from _root, so a symlinked container root would make
+  # the lookup miss and this check cry wolf.
+  created=$(git -C "$dir" symbolic-ref --quiet --short HEAD 2>/dev/null)
+  if [ "$created" != "$br" ]; then
+    echo "git trees add: worktree at $dir is on '${created:-detached HEAD}', not '$br'" >&2
+    return 1
   fi
 
   if [ "$no_push" -eq 1 ]; then

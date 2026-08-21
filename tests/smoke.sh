@@ -361,6 +361,55 @@ assert_not_contains "list does not show it as having no worktree" \
 
 cd "$C" || exit 1
 
+# --- add with a remote-only base ---------------------------------------------
+
+# A base naming a branch that exists only on the remote used to be handed to
+# `git worktree add -b <new> <dir> <base>` verbatim, where git's DWIM turned it
+# into "create a local branch tracking origin/<base>" and overrode `-b <new>`
+# entirely: the worktree came up on <base>, <new> was never created, a stray
+# local <base> ref was left behind to go stale, and the command exited 0.
+section "add — remote-only base"
+RB=$(new_container remote-base-c)
+
+# A branch on origin that the container has never had locally: created after the
+# clone, so only the remote-tracking ref exists. Its own commit, so "based on it"
+# is distinguishable from "based on main".
+RB_SHA=$(git -C "$ORIGIN" commit-tree "$(git -C "$ORIGIN" rev-parse 'main^{tree}')" \
+  -p main -m relbase)
+git -C "$ORIGIN" branch relbase "$RB_SHA" >/dev/null 2>&1
+cd "$RB" || exit 1
+git fetch -q origin
+assert_fail "the base branch is remote-only" \
+  git show-ref --verify --quiet refs/heads/relbase
+
+assert_ok "add on a remote-only base" bash "$T" add newfromremote relbase
+assert_eq "the worktree is on the requested branch, not the base" \
+  "$(git -C newfromremote symbolic-ref --short HEAD 2>/dev/null)" "newfromremote"
+assert_eq "the new branch starts at origin/<base>" \
+  "$(git -C newfromremote rev-parse HEAD 2>/dev/null)" "$RB_SHA"
+assert_fail "no stray local branch named after the base" \
+  git show-ref --verify --quiet refs/heads/relbase
+assert_eq "the new branch tracks its own remote, not the base" \
+  "$(git -C newfromremote rev-parse --abbrev-ref '@{upstream}' 2>/dev/null)" \
+  "origin/newfromremote"
+
+# The same base spelled out explicitly must behave identically.
+assert_ok "add on an explicit origin/<base>" bash "$T" add explicitbase origin/relbase
+assert_eq "the explicit form checks out the requested branch" \
+  "$(git -C explicitbase symbolic-ref --short HEAD 2>/dev/null)" "explicitbase"
+assert_eq "the explicit form starts at that commit" \
+  "$(git -C explicitbase rev-parse HEAD 2>/dev/null)" "$RB_SHA"
+
+# A base that resolves to nothing is an error, not a worktree on something else.
+out=$(bash "$T" add frombogus no/such/base 2>&1)
+assert_fail "add on a nonexistent base fails" bash "$T" add frombogus no/such/base
+assert_contains "the error names the bad base" "$out" "no/such/base"
+assert_fail "no worktree was left behind for a bad base" test -e "$RB/frombogus"
+
+git -C "$ORIGIN" branch -D relbase >/dev/null 2>&1
+
+cd "$C" || exit 1
+
 # A failed upstream setup must fail `add` (the worktree may still exist).
 BROKE=$(new_container add-nopush-remote)
 cd "$BROKE" || exit 1
