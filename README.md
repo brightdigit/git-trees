@@ -138,6 +138,20 @@ fi
 `main` is the stable release. A re-install from these URLs picks up the current
 stable script and template.
 
+**Homebrew.** Not yet published — the formula lives at
+[`Formula/git-trees.rb`](Formula/git-trees.rb) in this repo and takes effect
+once it is pushed to the tap (see [`docs/RELEASING.md`](docs/RELEASING.md)).
+After that:
+
+```bash
+brew tap brightdigit/tap
+brew install git-trees
+```
+
+Homebrew cannot write to your home directory, so this path installs the script
+but not the agents template. `brew install` prints the one command that puts the
+bundled template at `~/.config/git-trees/AGENTS.md`.
+
 Either way, make sure the destination is on your `PATH`:
 
 ```bash
