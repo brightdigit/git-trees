@@ -212,6 +212,11 @@ Creates a worktree, handling three cases:
 | Branch exists on `origin` | Fetch, create with `--track` |
 | Branch is new | Create from `base` (default `origin/<default>`) with `--no-track` |
 
+`base` is resolved to a commit before the worktree is created. A bare name that
+exists only on `origin` resolves to `origin/<name>`, so `add newwork v1.2.0`
+starts the branch where you meant and leaves no local `v1.2.0` behind; a base
+that resolves to nothing is an error rather than a worktree on something else.
+
 > **`add` writes to the remote by default.** When pushing is enabled, upstream is
 > set afterward via `track`. If the branch does not exist on `origin`, that runs
 > `git push -u origin HEAD` — **which creates the branch on the remote.** This
