@@ -480,12 +480,68 @@ assert_ok "install.sh seeded the agents template" \
 assert_eq "install.sh template matches AGENTS.md.template" \
   "$(cat "$IHOME/.config/git-trees/AGENTS.md")" \
   "$(cat "$REPO/AGENTS.md.template")"
+assert_ok "install.sh installed the bash completion" \
+  test -f "$IHOME/.config/git-trees/completions/git-trees.bash"
+assert_ok "install.sh installed the zsh completion" \
+  test -f "$IHOME/.config/git-trees/completions/_git-trees"
+assert_eq "installed bash completion matches the source" \
+  "$(cat "$IHOME/.config/git-trees/completions/git-trees.bash")" \
+  "$(cat "$REPO/completions/git-trees.bash")"
+assert_eq "installed zsh completion matches the source" \
+  "$(cat "$IHOME/.config/git-trees/completions/_git-trees")" \
+  "$(cat "$REPO/completions/_git-trees")"
+assert_contains "install.sh reports where the bash completion landed" \
+  "$out" ".config/git-trees/completions/git-trees.bash"
+assert_contains "install.sh reports where the zsh completion landed" \
+  "$out" ".config/git-trees/completions/_git-trees"
+assert_contains "install.sh explains how to activate completions" \
+  "$out" "to activate completions"
+
+# The bash completion must define the function bash-completion's git driver
+# dispatches to: `git trees` -> `_git_trees` (dashes become underscores).
+out=$(bash -c '
+  source "$1" || exit 1
+  declare -f _git_trees >/dev/null || exit 1
+  COMP_WORDS=(git trees ""); COMP_CWORD=2; COMPREPLY=()
+  _git_trees
+  echo "${COMPREPLY[*]}"
+' _ "$REPO/completions/git-trees.bash" 2>&1)
+assert_contains "bash completion defines _git_trees and offers subcommands" "$out" "clean"
+assert_contains "bash completion offers the list alias" "$out" "ls"
+
+out=$(bash -c '
+  source "$1" || exit 1
+  COMP_WORDS=(git trees clean "--"); COMP_CWORD=3; COMPREPLY=()
+  _git_trees
+  echo "${COMPREPLY[*]}"
+' _ "$REPO/completions/git-trees.bash" 2>&1)
+assert_contains "bash completion offers clean flags" "$out" "--merged"
+assert_contains "bash completion offers --apply" "$out" "--apply"
+
+# Completing outside a repository must be silent and empty, never an error.
+# The single quotes are deliberate: these expansions belong to the inner bash.
+# shellcheck disable=SC2016
+COMP_PROBE_OUTSIDE='
+  source "$1" || exit 1
+  COMP_WORDS=(git trees rm ""); COMP_CWORD=3; COMPREPLY=()
+  _git_trees
+  echo "rc=$? n=${#COMPREPLY[@]}"
+'
+out=$(in_dir "$TMP" bash -c "$COMP_PROBE_OUTSIDE" _ "$REPO/completions/git-trees.bash" 2>&1)
+assert_eq "bash completion is empty and quiet outside a repo" "$out" "rc=0 n=0"
+
 echo CUSTOM > "$IHOME/.config/git-trees/AGENTS.md"
+echo CUSTOMBASH > "$IHOME/.config/git-trees/completions/git-trees.bash"
+echo CUSTOMZSH > "$IHOME/.config/git-trees/completions/_git-trees"
 HOME="$IHOME" bash "$REPO/install.sh" "$IDEST" >/dev/null 2>&1
 rc=$?
 assert_eq "install.sh rerun exits 0" "$rc" "0"
 assert_eq "install.sh does not overwrite an existing template" \
   "$(cat "$IHOME/.config/git-trees/AGENTS.md")" "CUSTOM"
+assert_eq "install.sh does not overwrite an existing bash completion" \
+  "$(cat "$IHOME/.config/git-trees/completions/git-trees.bash")" "CUSTOMBASH"
+assert_eq "install.sh does not overwrite an existing zsh completion" \
+  "$(cat "$IHOME/.config/git-trees/completions/_git-trees")" "CUSTOMZSH"
 
 # --- rm ----------------------------------------------------------------------
 

@@ -1,0 +1,120 @@
+#compdef git-trees
+# zsh completion for git-trees.
+#
+# The filename is not arbitrary: zsh's `_git` dispatches `git <cmd>` by calling
+# a function named `_git-<cmd>`, so `git trees` requires this file to be named
+# `_git-trees` and to sit on `fpath` ahead of `compinit`. The `#compdef
+# git-trees` tag additionally wires up the standalone `git-trees` binary.
+
+# Worktree directory names, which are branch names slugged with `/`->`-` and so
+# routinely coincide with branch names — hence the `(u)` dedupe below. The bare
+# container root is listed as a worktree by git but is not a removable target.
+# Errors are swallowed so completing outside a repository is silent, not noisy.
+__git_trees_worktree_names() {
+  git worktree list --porcelain 2>/dev/null |
+    awk '/^worktree /{ sub(/^worktree /, ""); n = split($0, p, "/"); if (p[n] !~ /\.git$/) print p[n] }'
+}
+
+__git_trees_targets() {
+  local -a targets
+  targets=(
+    ${(f)"$(git for-each-ref --format='%(refname:short)' refs/heads 2>/dev/null)"}
+    ${(f)"$(__git_trees_worktree_names)"}
+  )
+  _describe -t targets 'branch or worktree' "${(@u)targets}"
+}
+
+__git_trees_worktrees() {
+  local -a wts
+  wts=( ${(f)"$(__git_trees_worktree_names)"} )
+  _describe -t worktrees 'worktree' wts
+}
+
+_git-trees() {
+  local curcontext="$curcontext" state line ret=1
+  typeset -A opt_args
+
+  local -a commands
+  commands=(
+    'init:create bare repo + worktree layout'
+    'root:print project root; link .git if missing'
+    'add:create a worktree (sets upstream)'
+    'track:ensure branch has an upstream'
+    'list:worktrees + branches without one'
+    'ls:alias for list'
+    'rm:remove worktree and delete branch'
+    'clean:report/remove merged or gone branches'
+    'sync:update a worktree from its upstream'
+    'prune:remove stale worktree administrative files'
+    'help:show usage'
+  )
+
+  _arguments -C \
+    '1: :->command' \
+    '*:: :->args' && ret=0
+
+  case $state in
+    command)
+      _describe -t commands 'git trees command' commands && ret=0
+      ;;
+    args)
+      case $words[1] in
+        init)
+          _arguments \
+            '--host[host for the clone URL]:host:_hosts' \
+            '--dir[directory to create]:directory:_files -/' \
+            '1:repository:' && ret=0
+          ;;
+        root)
+          _arguments \
+            '--agents[seed AGENTS.md at the container root]' \
+            '1:directory:_files -/' && ret=0
+          ;;
+        add)
+          _arguments \
+            '--print-path[print the worktree path on stdout]' \
+            '--no-push[do not create the branch on origin]' \
+            '1:branch:__git_trees_targets' \
+            '2:base:__git_trees_targets' && ret=0
+          ;;
+        track)
+          _arguments \
+            '--no-push[do not create the branch on origin]' \
+            '1:worktree path:_files -/' && ret=0
+          ;;
+        list|ls)
+          _arguments '--json[emit JSON]' && ret=0
+          ;;
+        rm)
+          _arguments \
+            '--apply[actually remove; without it, report only]' \
+            '1:branch or path:__git_trees_targets' && ret=0
+          ;;
+        clean)
+          # --merged and --gone are mutually exclusive selectors.
+          _arguments \
+            '(--gone)--merged[select branches merged into the default branch]' \
+            '(--merged)--gone[select branches whose upstream is gone]' \
+            '--apply[actually remove; without it, report only]' && ret=0
+          ;;
+        sync)
+          # --ff-only and --rebase pick competing merge strategies.
+          _arguments \
+            '--pull[fetch and integrate from the upstream]' \
+            '(--rebase)--ff-only[refuse anything but a fast-forward]' \
+            '(--ff-only)--rebase[rebase onto the upstream]' \
+            '1:worktree:__git_trees_worktrees' && ret=0
+          ;;
+        prune)
+          _arguments '--dry-run[report without removing]' && ret=0
+          ;;
+      esac
+      ;;
+  esac
+
+  return ret
+}
+
+# When zsh's `_git` sources this file it only wants the function defined; when
+# compinit autoloads it for the standalone binary the function must also run.
+_git-trees "$@"
