@@ -10,6 +10,7 @@
 #   git trees list [--json]            (alias: ls)
 #   git trees rm <branch|path> [--apply]
 #   git trees clean [--merged|--gone] [--apply]
+#   git trees prune [--dry-run]
 #
 # Env (all optional):
 #   TREES_HOST             default host for init (default: github.com)
@@ -750,6 +751,64 @@ cmd_clean() {
 
 
 
+# --- prune -------------------------------------------------------------------
+
+cmd_prune() {
+  local dry=0 report names failed=0
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --dry-run) dry=1; shift ;;
+      -*) echo "git trees prune: unknown option $1" >&2; return 1 ;;
+      *) echo "usage: git trees prune [--dry-run]" >&2; return 1 ;;
+    esac
+  done
+
+  _root >/dev/null || { echo "git trees prune: not in a git repo" >&2; return 1; }
+
+  # Exempt from the "nothing destructive without --apply" rule on purpose: this
+  # only unlinks $GIT_COMMON_DIR/worktrees/<name>/ metadata for directories that
+  # are ALREADY GONE from disk. A directory still present is never a candidate,
+  # and the branch the entry held is left untouched — there is no work to lose.
+  # Gating it behind --apply would make the common case a no-op plus a nag.
+  #
+  # 2>&1 is required: `git worktree prune --verbose` writes its report to stderr,
+  # so a plain command substitution captures nothing. Capture before acting so
+  # the list survives a prune that fails partway, and so --dry-run can report it.
+  report=$(git worktree prune --dry-run --verbose 2>&1)
+
+  if [ -z "$report" ]; then
+    echo "git trees prune: nothing to prune" >&2
+    return 0
+  fi
+
+  # Whole-line match rather than $2: a worktree name may contain a space, which
+  # field splitting would truncate.
+  names=$(printf '%s\n' "$report" | awk '
+    /^Removing worktrees\// {
+      n = $0
+      sub(/^Removing worktrees\//, "", n)
+      sub(/: .*$/, "", n)
+      print n
+    }')
+
+  [ -n "$names" ] && printf '%s\n' "$names"
+  printf '%s\n' "$report" >&2
+
+  if [ "$dry" -eq 1 ]; then
+    echo "(dry run — no metadata was removed)" >&2
+    return 0
+  fi
+
+  if ! git worktree prune; then
+    echo "git trees prune: git worktree prune failed" >&2
+    failed=1
+  fi
+
+  return "$failed"
+}
+
+
 # --- usage / dispatch --------------------------------------------------------
 
 usage() {
@@ -764,6 +823,7 @@ usage: git trees <command> [args]
   list [--json]                               worktrees + branches without one
   rm <branch|path> [--apply]                  remove worktree and delete branch
   clean [--merged|--gone] [--apply]           report/remove merged or gone branches
+  prune [--dry-run]                           drop metadata for deleted worktree dirs
 
 
 
@@ -796,6 +856,7 @@ main() {
     list|ls)   cmd_list  "$@" ;;
     rm)        cmd_rm    "$@" ;;
     clean)     cmd_clean "$@" ;;
+    prune)     cmd_prune "$@" ;;
     help|--help|-h) usage; return 0 ;;
     *) echo "git trees: unknown command '$cmd'" >&2; usage; return 1 ;;
   esac
