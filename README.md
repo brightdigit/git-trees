@@ -119,21 +119,24 @@ cd git-trees && ./install.sh              # → ~/.local/bin
 ./install.sh /usr/local/bin               # or anywhere else
 ```
 
-**Convenience — curl.** Fetches the script and the agents template (skips the
-template if that path is already occupied, including a broken symlink):
+**Convenience — one-line curl.** Same installer, downloaded and run in place.
+It fetches the script *and* the agents template (skipping the template if that
+path is already occupied, including a broken symlink):
 
 ```bash
-mkdir -p ~/.local/bin ~/.config/git-trees
-tmp=$(mktemp) && curl -fsSL -o "$tmp" \
-  https://raw.githubusercontent.com/brightdigit/git-trees/main/git-trees \
-  && mv "$tmp" ~/.local/bin/git-trees
-chmod +x ~/.local/bin/git-trees
-if [ ! -e ~/.config/git-trees/AGENTS.md ] && [ ! -L ~/.config/git-trees/AGENTS.md ]; then
-  tmp=$(mktemp) && curl -fsSL -o "$tmp" \
-    https://raw.githubusercontent.com/brightdigit/git-trees/main/AGENTS.md.template \
-    && mv "$tmp" ~/.config/git-trees/AGENTS.md
-fi
+curl -fsSL https://raw.githubusercontent.com/brightdigit/git-trees/main/install.sh | bash
 ```
+
+A piped script receives no positional arguments, so set `TREES_DEST` to install
+somewhere other than `~/.local/bin`:
+
+```bash
+TREES_DEST=/usr/local/bin curl -fsSL \
+  https://raw.githubusercontent.com/brightdigit/git-trees/main/install.sh | bash
+```
+
+The installer uses `curl` or `wget`, whichever it finds, and verifies each
+download is complete and non-empty before installing anything.
 
 `main` is the stable release. A re-install from these URLs picks up the current
 stable script and template.
@@ -145,12 +148,13 @@ case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *)
   echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc ;; esac
 ```
 
-`install.sh` warns if it isn't; the curl path cannot. Anything on `PATH` named
-`git-trees` becomes `git trees`.
+`install.sh` warns if it isn't — either way you run it. Anything on `PATH`
+named `git-trees` becomes `git trees`.
 
 ## Configuration
 
-All three variables are optional. Add to `~/.zshrc` (or `~/.bashrc`):
+Every variable in [**Environment**](#environment) is optional. Add to
+`~/.zshrc` (or `~/.bashrc`):
 
 ```zsh
 export TREES_ORG=your-org
@@ -322,6 +326,7 @@ git worktree prune
 | `TREES_AGENTS_TEMPLATE` | `~/.config/git-trees/AGENTS.md` | Seeded at the container root by `init` (and `root --agents`) |
 | `TREES_NO_PUSH` | *(unset)* | Any non-empty value: `add`/`track` never create a branch on `origin` |
 | `TREES_RM_CMD` | *(unset)* | Custom command for worktree directory removal (defaults to `git worktree remove`). Bypasses git's uncommitted-work check — see [`git trees rm`](#git-trees-rm-branchpath---apply) |
+| `TREES_DEST` | `~/.local/bin` | Install destination for `install.sh`; the only way to choose one when piping the installer |
 
 ## Shell wrapper (optional)
 
