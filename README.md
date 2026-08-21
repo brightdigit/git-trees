@@ -289,6 +289,24 @@ By default (without `--apply`), `clean` operates in dry-run mode and prints matc
 on stderr, and exits nonzero if any of them did.
 
 
+### `git trees prune [--dry-run]`
+
+Drops git's administrative entries for worktree directories that are no longer on disk.
+
+When a worktree directory is deleted by hand (`rm -rf feature-x`) instead of through `git trees rm`, git keeps its bookkeeping under the bare store. The stale entry keeps showing up in `git worktree list` and holds the branch locked against a fresh checkout. `prune` clears those entries.
+
+Stale worktree names are printed to stdout, one per line; git's reason for each goes to stderr. With nothing to prune it prints a notice on stderr and exits 0.
+
+Pass `--dry-run` to list what would be dropped without touching anything.
+
+> **Unlike `rm` and `clean`, `prune` acts immediately — there is no `--apply`.** It only removes metadata for directories that are *already gone*; a worktree still on disk is never a candidate, and the branch a pruned entry held is left alone. There is no work to lose.
+
+```bash
+git trees prune --dry-run                 # list stale entries, change nothing
+git trees prune                           # drop them
+```
+
+
 
 ## Removing worktrees
 
