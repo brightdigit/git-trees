@@ -144,6 +144,7 @@ assert_contains "help lists add" "$out" "add <branch>"
 assert_contains "help lists list" "$out" "list [--json]"
 assert_contains "help lists rm" "$out" "rm <branch|path>"
 assert_contains "help lists clean" "$out" "clean [--merged|--gone]"
+assert_contains "help lists prune" "$out" "prune [--dry-run]"
 
 
 section "outside a repo"
@@ -548,6 +549,62 @@ assert_fail "custom rm deleted branch" git show-ref --verify --quiet refs/heads/
 
 assert_fail "rm with no argument" bash "$T" rm
 assert_fail "rm with nonexistent target" bash "$T" rm nonexistent
+
+
+# --- prune -------------------------------------------------------------------
+
+# Fixtures here must not mutate the shared $ORIGIN — everything stays inside
+# this container, so the section is safe to run before clean.
+section "prune"
+PR_C=$(new_container prune-c)
+cd "$PR_C" || exit 1
+
+# A container with every worktree present has nothing to prune.
+out=$(bash "$T" prune 2>/dev/null)
+assert_eq "prune on a clean container prints nothing to stdout" "$out" ""
+assert_ok "prune on a clean container exits 0" bash "$T" prune
+out=$(bash "$T" prune 2>&1)
+assert_contains "prune reports nothing to prune on stderr" "$out" "nothing to prune"
+
+# Delete a worktree directory behind git's back, the way a user would.
+assert_ok "create worktree to prune" bash "$T" add prune-target --no-push
+assert_ok "prune target directory exists" test -d prune-target
+rm -rf prune-target
+assert_ok "stale entry still registered before prune" \
+  test -d "$PR_C/trees-bare.git/worktrees/prune-target"
+
+out=$(bash "$T" prune --dry-run 2>/dev/null)
+assert_eq "dry run names the stale worktree on stdout" "$out" "prune-target"
+assert_ok "dry run leaves the metadata intact" \
+  test -d "$PR_C/trees-bare.git/worktrees/prune-target"
+out=$(bash "$T" prune --dry-run 2>&1)
+assert_contains "dry run says it was a dry run" "$out" "dry run"
+
+out=$(bash "$T" prune 2>/dev/null)
+assert_eq "prune names the stale worktree on stdout" "$out" "prune-target"
+assert_fail "prune removed the stale metadata" \
+  test -d "$PR_C/trees-bare.git/worktrees/prune-target"
+# The branch is the whole reason prune is safe without --apply: it survives.
+assert_ok "prune left the branch alone" \
+  git show-ref --verify --quiet refs/heads/prune-target
+assert_not_contains "pruned worktree is gone from git worktree list" \
+  "$(git worktree list)" "prune-target"
+
+# Idempotent: a second run finds nothing and still succeeds.
+assert_ok "prune is idempotent" bash "$T" prune
+out=$(bash "$T" prune 2>/dev/null)
+assert_eq "second prune prints nothing to stdout" "$out" ""
+
+# A worktree still on disk is never a candidate.
+assert_ok "create a live worktree" bash "$T" add prune-live --no-push
+assert_ok "prune with a live worktree exits 0" bash "$T" prune
+assert_ok "prune left the live worktree directory" test -d prune-live
+assert_ok "prune left the live worktree registered" \
+  test -d "$PR_C/trees-bare.git/worktrees/prune-live"
+
+assert_fail "prune unknown option" bash "$T" prune --nope
+assert_fail "prune rejects a positional argument" bash "$T" prune extra
+assert_fail "prune outside a repo" in_dir "$TMP/plain" bash "$T" prune
 
 
 # --- clean -------------------------------------------------------------------
