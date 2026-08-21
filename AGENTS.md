@@ -139,7 +139,17 @@ What the suite covers:
   through `json.load`
 - **install.sh** — places the binary; seeds `~/.config/git-trees/AGENTS.md` from
   the template under a redirected `HOME`; does not overwrite an existing config
-  file
+  file; honours `TREES_DEST`, with a positional argument still winning over it
+- **install.sh — no-repo bootstrap** — the `curl | bash` path, with
+  `TREES_BASE_URL` pointed at a `file://` fixture so the real download branch
+  runs without touching the network: piped on stdin from a directory with no
+  `git-trees` in it (piped bash has neither `BASH_SOURCE` nor `$1`, and `set -u`
+  makes a bare reference to either fatal), the `wget` fallback on a `PATH` built
+  without `curl`, a clear error when neither downloader exists, a **zero-byte
+  body** rejected (the transfer succeeds, so only the non-empty check catches
+  it), a missing script failing loudly and installing nothing, a missing
+  template warning while the binary still installs, no-clobber on rerun, and the
+  temp download directory cleaned up by its trap
 - **rm** — dry run vs `--apply`, worktree removal by branch and by path (a
   slugged directory whose name is not a branch name, so the path arm is the one
   that runs), `-d` escalating to `-D` so an unmerged branch is still deleted
