@@ -144,6 +144,7 @@ assert_contains "help lists add" "$out" "add <branch>"
 assert_contains "help lists list" "$out" "list [--json]"
 assert_contains "help lists rm" "$out" "rm <branch|path>"
 assert_contains "help lists clean" "$out" "clean [--merged|--gone]"
+assert_contains "help lists sync" "$out" "sync [worktree]"
 
 
 section "outside a repo"
@@ -548,6 +549,141 @@ assert_fail "custom rm deleted branch" git show-ref --verify --quiet refs/heads/
 
 assert_fail "rm with no argument" bash "$T" rm
 assert_fail "rm with nonexistent target" bash "$T" rm nonexistent
+
+
+# --- sync --------------------------------------------------------------------
+
+# These fixtures mutate the shared $ORIGIN, so they commit on `feature-x` ONLY,
+# never on `main`. Every new_container clones $ORIGIN and `clean` below derives
+# its expectations from main's history; a commit on main here would change what
+# later sections see. The `clean` section must still run last for the same
+# reason — it mutates main.
+section "sync"
+SYNC_C=$(new_container sync-c)
+cd "$SYNC_C" || exit 1
+
+assert_ok "sync: add feature-x worktree" bash "$T" add feature-x --no-push
+assert_ok "sync: feature-x tracks origin" \
+  in_dir feature-x git rev-parse --abbrev-ref '@{upstream}'
+
+# Advance origin/feature-x behind the container's back. Asserted step by step:
+# a fixture that failed quietly would leave feature-x already up to date, and
+# every assertion below would pass without testing anything.
+assert_ok "sync: checkout feature-x on origin" in_dir "$ORIGIN" git checkout -q feature-x
+echo "upstream change" > "$ORIGIN/upstream.txt"
+assert_ok "sync: stage upstream change" in_dir "$ORIGIN" git add upstream.txt
+assert_ok "sync: commit upstream change" in_dir "$ORIGIN" git commit -qm "upstream commit"
+assert_ok "sync: leave origin on main" in_dir "$ORIGIN" git checkout -q main
+
+before_head=$(git -C "$SYNC_C/feature-x" rev-parse HEAD)
+before_remote=$(git -C "$SYNC_C" rev-parse origin/feature-x)
+
+# Fetch only: the remote-tracking ref advances, the work tree does not.
+assert_ok "sync (fetch only) exits 0" bash "$T" sync
+assert_eq "sync fetch advanced origin/feature-x" \
+  "$(git -C "$SYNC_C" rev-parse origin/feature-x)" \
+  "$(git -C "$ORIGIN" rev-parse feature-x)"
+assert_fail "sync fetch actually moved the remote ref" \
+  test "$before_remote" = "$(git -C "$SYNC_C" rev-parse origin/feature-x)"
+assert_eq "sync fetch left the worktree HEAD alone" \
+  "$(git -C "$SYNC_C/feature-x" rev-parse HEAD)" "$before_head"
+assert_fail "sync fetch did not write the upstream file" test -e feature-x/upstream.txt
+
+# --pull fast-forwards and names the branch on stdout.
+out=$(bash "$T" sync --pull 2>/dev/null)
+assert_contains "sync --pull names the updated branch on stdout" "$out" "feature-x"
+assert_eq "sync --pull fast-forwarded the worktree" \
+  "$(git -C "$SYNC_C/feature-x" rev-parse HEAD)" \
+  "$(git -C "$SYNC_C" rev-parse origin/feature-x)"
+assert_ok "sync --pull applied the upstream file" test -e feature-x/upstream.txt
+
+# A dirty worktree is skipped: nonzero exit, uncommitted work preserved, and the
+# upstream change NOT applied over it.
+assert_ok "sync: checkout feature-x on origin again" in_dir "$ORIGIN" git checkout -q feature-x
+echo "second upstream change" > "$ORIGIN/upstream2.txt"
+assert_ok "sync: stage second upstream change" in_dir "$ORIGIN" git add upstream2.txt
+assert_ok "sync: commit second upstream change" in_dir "$ORIGIN" git commit -qm "second upstream commit"
+assert_ok "sync: back to main on origin" in_dir "$ORIGIN" git checkout -q main
+
+echo "my work in progress" > feature-x/dirty.txt
+assert_fail "sync --pull exits nonzero on a dirty worktree" bash "$T" sync feature-x --pull
+out=$(bash "$T" sync feature-x --pull 2>&1 >/dev/null)
+assert_contains "sync reports the dirty skip" "$out" "uncommitted changes"
+assert_ok "sync left the uncommitted file in place" test -e feature-x/dirty.txt
+assert_fail "sync did not apply the upstream change over dirty work" \
+  test -e feature-x/upstream2.txt
+rm -f feature-x/dirty.txt
+
+# Clean again, so the pending upstream commit lands and later cases start level.
+assert_ok "sync --pull after cleaning the worktree" bash "$T" sync feature-x --pull
+assert_ok "sync applied the second upstream change" test -e feature-x/upstream2.txt
+
+# Single target by branch name and by path both resolve to the same worktree.
+out=$(bash "$T" sync feature-x --pull 2>/dev/null)
+assert_eq "sync by branch name targets only that worktree" "$out" "feature-x"
+out=$(bash "$T" sync "$SYNC_C/feature-x" --pull 2>/dev/null)
+assert_eq "sync by path targets only that worktree" "$out" "feature-x"
+
+# No upstream: skipped, named, and counted as a failure.
+assert_ok "sync: add branch with no upstream" bash "$T" add no-upstream --no-push
+assert_fail "sync --pull exits nonzero with an untracked branch" \
+  bash "$T" sync no-upstream --pull
+out=$(bash "$T" sync no-upstream --pull 2>&1 >/dev/null)
+assert_contains "sync reports the missing upstream" "$out" "no upstream"
+assert_contains "sync names track as the remedy" "$out" "git trees track"
+
+# Detached HEAD: reported, but not a failure on its own — detaching is
+# deliberate, and failing would make `sync --pull` permanently nonzero.
+assert_ok "sync: add detached worktree" bash "$T" add detached-wt --no-push
+assert_ok "sync: detach its HEAD" \
+  in_dir detached-wt git -c advice.detachedHead=false checkout -q HEAD~0 --detach
+out=$(bash "$T" sync "$SYNC_C/detached-wt" --pull 2>&1 >/dev/null)
+assert_contains "sync reports the detached HEAD skip" "$out" "detached HEAD"
+assert_ok "sync --pull exits 0 for a detached worktree alone" \
+  bash "$T" sync "$SYNC_C/detached-wt" --pull
+
+# Divergence: --ff-only refuses (git exits 128, not 1 — assert nonzero only),
+# the local commit survives, and --rebase gets past it keeping both commits.
+assert_ok "sync: checkout feature-x on origin for divergence" \
+  in_dir "$ORIGIN" git checkout -q feature-x
+echo "diverging upstream" > "$ORIGIN/diverge-remote.txt"
+assert_ok "sync: stage diverging upstream" in_dir "$ORIGIN" git add diverge-remote.txt
+assert_ok "sync: commit diverging upstream" in_dir "$ORIGIN" git commit -qm "diverging upstream commit"
+assert_ok "sync: origin back to main after divergence" in_dir "$ORIGIN" git checkout -q main
+
+echo "diverging local" > feature-x/diverge-local.txt
+assert_ok "sync: stage diverging local" in_dir feature-x git add diverge-local.txt
+assert_ok "sync: commit diverging local" in_dir feature-x git commit -qm "diverging local commit"
+local_commit=$(git -C "$SYNC_C/feature-x" rev-parse HEAD)
+
+assert_fail "sync --pull --ff-only exits nonzero when diverged" \
+  bash "$T" sync feature-x --pull --ff-only
+out=$(bash "$T" sync feature-x --pull --ff-only 2>&1 >/dev/null)
+assert_contains "sync reports the divergence" "$out" "diverged"
+assert_contains "sync names --rebase as the remedy" "$out" "--rebase"
+assert_eq "sync --ff-only preserved the local commit" \
+  "$(git -C "$SYNC_C/feature-x" rev-parse HEAD)" "$local_commit"
+
+assert_ok "sync --pull --rebase gets past the divergence" \
+  bash "$T" sync feature-x --pull --rebase
+assert_ok "sync --rebase kept the local change" test -e feature-x/diverge-local.txt
+assert_ok "sync --rebase applied the upstream change" test -e feature-x/diverge-remote.txt
+assert_ok "sync --rebase left no rebase in progress" \
+  test ! -d "$(git -C "$SYNC_C/feature-x" rev-parse --git-path rebase-merge)"
+
+# Argument validation.
+assert_fail "sync rejects --ff-only with --rebase" \
+  bash "$T" sync --pull --ff-only --rebase
+out=$(bash "$T" sync --pull --ff-only --rebase 2>&1 >/dev/null)
+assert_contains "sync explains the strategy conflict" "$out" "mutually exclusive"
+assert_fail "sync rejects --ff-only without --pull" bash "$T" sync --ff-only
+assert_fail "sync rejects --rebase without --pull" bash "$T" sync --rebase
+out=$(bash "$T" sync --rebase 2>&1 >/dev/null)
+assert_contains "sync explains that a strategy needs --pull" "$out" "requires --pull"
+assert_fail "sync rejects an unknown option" bash "$T" sync --nope
+assert_fail "sync rejects a second positional" bash "$T" sync feature-x extra
+assert_fail "sync rejects a nonexistent target" bash "$T" sync definitely-not-a-worktree
+assert_fail "sync outside a repo" in_dir "$TMP/plain" bash "$T" sync
 
 
 # --- clean -------------------------------------------------------------------
