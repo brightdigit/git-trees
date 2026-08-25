@@ -160,15 +160,17 @@ edited, so a reinstall keeps your changes.
 source ~/.config/git-trees/completions/git-trees.bash
 ```
 
-**zsh** — put the directory on `fpath` *before* `compinit` runs in `~/.zshrc`:
+**zsh** — source the same bash file from `~/.zshrc` (after oh-my-zsh /
+`bashcompinit` if you use them):
 
 ```zsh
-fpath=(~/.config/git-trees/completions $fpath)
-autoload -U compinit && compinit
+source ~/.config/git-trees/completions/git-trees.bash
 ```
 
-If you already ran `compinit`, start a new shell (or `rm -f ~/.zcompdump`
-first) so the new file is picked up.
+Homebrew's `git` completion is a bash wrapper: it dispatches `git trees` to a
+function named `_git_trees`, so the bash file is what `git trees <TAB>` needs.
+Putting only `completions/` on `fpath` wires up the standalone `git-trees`
+binary under stock zsh `_git`, but is not enough for Homebrew.
 
 Completion covers every subcommand and its own flags, and completes branch and
 worktree names for `rm` from git itself. Outside a repository it stays silent
@@ -185,11 +187,12 @@ for f in git-trees.bash _git-trees; do
 done
 ```
 
-Then add the `source` line (bash) or the `fpath` line (zsh) above.
+Then add the `source` line above.
 
-The filenames are load-bearing. bash-completion dispatches `git trees` to a
-function named `_git_trees`, and zsh's `_git` dispatches it to a file named
-`_git-trees` on `fpath` — renaming either one silently disables completion.
+The filenames are load-bearing. Git's completion dispatches `git trees` to a
+function named `_git_trees`, and stock zsh's `_git` also looks for a file named
+`_git-trees` on `fpath` for the standalone binary — renaming either one
+silently disables completion.
 
 ## Configuration
 

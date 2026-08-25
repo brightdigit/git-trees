@@ -518,6 +518,17 @@ out=$(bash -c '
 assert_contains "bash completion offers clean flags" "$out" "--merged"
 assert_contains "bash completion offers --apply" "$out" "--apply"
 
+# Under Homebrew's zsh git wrapper, _git_trees must use __gitcomp (not
+# compgen/COMPREPLY). Stub the git-completion API and ensure we call it.
+out=$(bash -c '
+  source "$1" || exit 1
+  __gitcomp() { printf "GITCOMP:%s\n" "$1"; }
+  words=(git trees ""); cword=2; cur=""; prev=trees; __git_cmd_idx=1
+  _git_trees
+' _ "$REPO/completions/git-trees.bash" 2>&1)
+assert_contains "bash completion uses __gitcomp when available" "$out" "GITCOMP:"
+assert_contains "bash completion __gitcomp receives subcommands" "$out" "clean"
+
 # Completing outside a repository must be silent and empty, never an error.
 # The single quotes are deliberate: these expansions belong to the inner bash.
 # shellcheck disable=SC2016

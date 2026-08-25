@@ -31,12 +31,12 @@ ZSHCOMP="$CFG/completions/_git-trees"
 if [ -f "$SRC/completions/git-trees.bash" ] && [ ! -f "$BASHCOMP" ]; then
   mkdir -p "$CFG/completions"
   cp "$SRC/completions/git-trees.bash" "$BASHCOMP"
-  echo "installed $BASHCOMP (bash completion; source it from ~/.bashrc)"
+  echo "installed $BASHCOMP (completion for bash and for zsh with Homebrew git; source it from your shell rc)"
 fi
 if [ -f "$SRC/completions/_git-trees" ] && [ ! -f "$ZSHCOMP" ]; then
   mkdir -p "$CFG/completions"
   cp "$SRC/completions/_git-trees" "$ZSHCOMP"
-  echo "installed $ZSHCOMP (zsh completion; put its directory on fpath before compinit)"
+  echo "installed $ZSHCOMP (zsh completion for the standalone git-trees binary under stock zsh _git)"
 fi
 
 case ":$PATH:" in
@@ -49,9 +49,10 @@ echo "try: git trees help"
 
 if [ -f "$BASHCOMP" ] || [ -f "$ZSHCOMP" ]; then
   echo
-  echo "to activate completions, add one of these to your shell rc:"
-  [ -f "$BASHCOMP" ] && echo "  bash: source $BASHCOMP"
-  [ -f "$ZSHCOMP" ]  && echo "  zsh:  fpath=($CFG/completions \$fpath)   # before compinit"
+  echo "to activate completions, add this to your shell rc:"
+  # Homebrew's zsh git completion is a bash wrapper and needs the bash file;
+  # the zsh `_git-trees` on fpath only covers the standalone binary under stock zsh.
+  [ -f "$BASHCOMP" ] && echo "  source $BASHCOMP"
 fi
 
 if [ -z "${TREES_ORG:-}" ]; then

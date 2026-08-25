@@ -1,18 +1,18 @@
 # git-trees bash completion
 #
-# Source from ~/.bashrc (after bash-completion), or drop into a
-# bash-completion completions directory as `git-trees`.
+# Source from ~/.bashrc (after bash-completion), or from ~/.zshrc when using
+# Homebrew's git completion (a bash wrapper). Drop into a bash-completion
+# completions directory as `git-trees`.
 #
-# The function name is not arbitrary: bash-completion's git driver dispatches
-# `git <cmd>` to `_git_<cmd>` with dashes turned into underscores, so
-# `git trees` lands on `_git_trees`. The standalone `git-trees` binary is wired
-# up separately at the bottom of this file.
-
-# SC2207 disabled file-wide: its suggested fix is `mapfile`, which is bash 4+,
-# and this repo targets bash 3.2 (macOS system bash). The `COMPREPLY=( $(...) )`
-# word-splitting idiom is the portable form and is what bash-completion itself
-# uses.
-# shellcheck disable=SC2207
+# The function name is not arbitrary: git's completion dispatches `git <cmd>`
+# to `_git_<cmd>` with dashes turned into underscores, so `git trees` lands on
+# `_git_trees`. That path is shared by bash-completion and by Homebrew's zsh
+# `_git` wrapper — both expect this function to speak the git-completion API
+# (`$cur` / `$words` / `__gitcomp`), not raw `compgen`/`COMPREPLY`. Using
+# `compgen` under the zsh wrapper leaves `_ret=1` and falls through to path
+# completion.
+#
+# The standalone `git-trees` binary is wired up separately at the bottom.
 
 # Commands and per-subcommand flags live in one place so the two entry points
 # (`git trees` and `git-trees`) cannot drift apart.
@@ -36,9 +36,8 @@ __git_trees_flags() { # __git_trees_flags <subcommand>
 # Worktree directory names, which are branch names slugged with `/`->`-`, so
 # they routinely coincide with branch names — hence the awk dedupe. The bare
 # container root is listed as a worktree by git but is not a removable target.
-# Every git call is silenced and short-circuited so completing outside a
-# repository (or in a broken one) yields an empty list rather than an error in
-# the prompt.
+# Every git call is silenced so completing outside a repository is empty, not
+# noisy.
 __git_trees_worktrees() {
   git worktree list --porcelain 2>/dev/null |
     awk '/^worktree /{
@@ -57,58 +56,128 @@ __git_trees_targets() {
   } | awk '!seen[$0]++'
 }
 
-# The shared body. $1 is the index of the `git-trees` word itself in COMP_WORDS,
-# which differs between `git trees …` (1) and `git-trees …` (0).
-__git_trees_complete() {
-  local base="$1" cur prev sub i
-  cur="${COMP_WORDS[COMP_CWORD]}"
-  prev="${COMP_WORDS[COMP_CWORD-1]}"
+# Prefer git-completion's __gitcomp when present (bash, and Homebrew's zsh
+# wrapper which redefines it to compadd). Fall back to a COMPREPLY filler so
+# tests and a bare `source` without git-completion still work.
+__git_trees_comp() {
+  if declare -F __gitcomp >/dev/null 2>&1; then
+    __gitcomp "$@"
+    return
+  fi
+  local list="$1" prefix="${2-}" cur_="${3-$cur}" suffix="${4- }"
+  local c i=0
+  local IFS=$' \t\n'
+  COMPREPLY=()
+  for c in $list; do
+    if [ "$c" = "--" ]; then
+      continue
+    fi
+    case "$c" in
+      "$cur_"*)
+        case "$c" in
+          *=|*.) COMPREPLY[i++]="${prefix}$c" ;;
+          *)     COMPREPLY[i++]="${prefix}$c${suffix}" ;;
+        esac
+        ;;
+    esac
+  done
+}
 
-  # First non-flag word after the command name is the subcommand.
-  sub=''
-  i=$((base + 1))
-  while [ "$i" -lt "$COMP_CWORD" ]; do
-    case "${COMP_WORDS[i]}" in
+__git_trees_comp_nl() {
+  if declare -F __gitcomp_nl >/dev/null 2>&1; then
+    __gitcomp_nl "$@"
+    return
+  fi
+  local list="$1" prefix="${2-}" cur_="${3-$cur}" suffix="${4- }"
+  local c i=0
+  local IFS=$'\n'
+  COMPREPLY=()
+  for c in $list; do
+    case "$c" in
+      "$cur_"*) COMPREPLY[i++]="${prefix}$c${suffix}" ;;
+    esac
+  done
+}
+
+# Uses git-completion locals: cur, words, cword, prev, __git_cmd_idx.
+# __git_cmd_idx is the index of `trees` (or `git-trees` for the standalone).
+__git_trees_complete() {
+  local sub i flags
+
+  sub=
+  i=$((__git_cmd_idx + 1))
+  while [ "$i" -lt "$cword" ]; do
+    case "${words[i]}" in
       -*) ;;
-      *) sub="${COMP_WORDS[i]}"; break ;;
+      *) sub="${words[i]}"; break ;;
     esac
     i=$((i + 1))
   done
 
   if [ -z "$sub" ]; then
-    COMPREPLY=( $(compgen -W "$__git_trees_commands" -- "$cur") )
-    return 0
+    __git_trees_comp "$__git_trees_commands"
+    return
   fi
 
   # --host and --dir take a value; offering flags there would be wrong.
+  # Returning with no completer lets the shell fall back to default/path
+  # completion for --dir (and for root/track positionals below).
   case "$prev" in
-    --host) COMPREPLY=(); return 0 ;;
-    --dir)  COMPREPLY=( $(compgen -d -- "$cur") ); return 0 ;;
+    --host) return ;;
+    --dir)  return ;;
   esac
 
-  local flags
   flags=$(__git_trees_flags "$sub")
 
-  if [ "${cur:0:1}" = "-" ]; then
-    COMPREPLY=( $(compgen -W "$flags" -- "$cur") )
-    return 0
-  fi
+  case "$cur" in
+    -*)
+      __git_trees_comp "$flags"
+      return
+      ;;
+  esac
 
   # Positional argument. `init` takes an org/repo or URL we cannot enumerate.
   case "$sub" in
-    rm)          COMPREPLY=( $(compgen -W "$(__git_trees_targets)" -- "$cur") ) ;;
-    add)         COMPREPLY=( $(compgen -W "$(__git_trees_targets)" -- "$cur") ) ;;
-    sync)        COMPREPLY=( $(compgen -W "$(__git_trees_worktrees)" -- "$cur") ) ;;
-    root|track)  COMPREPLY=( $(compgen -d -- "$cur") ) ;;
-    *)           COMPREPLY=( $(compgen -W "$flags" -- "$cur") ) ;;
+    rm|add)      __git_trees_comp_nl "$(__git_trees_targets)" ;;
+    sync)        __git_trees_comp_nl "$(__git_trees_worktrees)" ;;
+    root|track)  return ;;
+    *)           __git_trees_comp "$flags" ;;
   esac
-  return 0
 }
 
-# bash-completion's git driver calls this with COMP_WORDS[0]="git",
-# COMP_WORDS[1]="trees".
-_git_trees() { __git_trees_complete 1; }
+# git's completion driver (bash, and Homebrew's zsh wrapper) calls this with
+# cur/words/cword/prev/__git_cmd_idx already set. When invoked from tests via
+# COMP_WORDS only, bootstrap those locals so the shared body can run.
+_git_trees() {
+  if [ -z "${words+set}" ] && [ -n "${COMP_WORDS+set}" ]; then
+    words=("${COMP_WORDS[@]}")
+    cword=$COMP_CWORD
+    cur="${COMP_WORDS[COMP_CWORD]}"
+    if [ "$COMP_CWORD" -gt 0 ]; then
+      prev="${COMP_WORDS[COMP_CWORD-1]}"
+    else
+      prev=
+    fi
+    __git_cmd_idx=1
+  fi
+  __git_trees_complete
+}
 
-# Direct invocation as `git-trees`.
-_git_trees_standalone() { __git_trees_complete 0; }
-complete -F _git_trees_standalone git-trees
+# Direct invocation as `git-trees` (COMP_WORDS[0]=git-trees).
+_git_trees_standalone() {
+  words=("${COMP_WORDS[@]}")
+  cword=$COMP_CWORD
+  cur="${COMP_WORDS[COMP_CWORD]}"
+  if [ "$COMP_CWORD" -gt 0 ]; then
+    prev="${COMP_WORDS[COMP_CWORD-1]}"
+  else
+    prev=
+  fi
+  __git_cmd_idx=0
+  __git_trees_complete
+}
+
+# `complete` is a bash builtin; under zsh it exists only after bashcompinit.
+if [ -n "${BASH_VERSION-}" ] || declare -F complete >/dev/null 2>&1; then
+  complete -F _git_trees_standalone git-trees
+fi
