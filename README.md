@@ -153,9 +153,11 @@ brew tap brightdigit/tap
 brew install git-trees
 ```
 
-Homebrew cannot write to your home directory, so this path installs the script
-but not the agents template. `brew install` prints the one command that puts the
-bundled template at `~/.config/git-trees/AGENTS.md`.
+Homebrew installs the completions for you — both files land in Homebrew's own
+completion directories, so no `source` line is needed. The agents template is
+the exception: a formula cannot write to your home directory, so `brew install`
+bundles the template inside its prefix and prints the one line that points
+`TREES_AGENTS_TEMPLATE` at it.
 
 Either way, make sure the destination is on your `PATH`:
 
@@ -170,8 +172,10 @@ named `git-trees` becomes `git trees`.
 ### Shell completions
 
 `install.sh` copies both completion files to `~/.config/git-trees/completions/`
-and prints the activation line for each. It never overwrites a copy you have
-edited, so a reinstall keeps your changes.
+and prints the `source` line for the bash file — the one both bash and
+Homebrew's zsh `git` completion need. The zsh file is wired up by `fpath`
+rather than sourced, so it has no activation line of its own. Neither copy is
+overwritten if you have edited it, so a reinstall keeps your changes.
 
 **bash** — source the file from `~/.bashrc`, after bash-completion itself:
 
@@ -383,7 +387,7 @@ Under `--pull`, a worktree is skipped when:
 | Rebase conflict | Reported; the worktree is **left mid-rebase** so you can resolve it, or run `git rebase --abort` |
 
 Dirtiness includes untracked files, matching the `dirty` column in
-[`git trees list`](#git-trees-list---json) and `git worktree remove`'s own
+[`git trees list`](#git-trees-list---json-alias-ls) and `git worktree remove`'s own
 refusal — so a stray `.DS_Store` is enough to skip a pull.
 
 The branch name of each successfully updated worktree goes to stdout, one per

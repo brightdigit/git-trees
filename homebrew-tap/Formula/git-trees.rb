@@ -7,6 +7,11 @@ class GitTrees < Formula
 
   def install
     bin.install "git-trees"
+    # The filenames are load-bearing: git's completion dispatches `git trees`
+    # to a function named `_git_trees` (the bash file), and stock zsh's `_git`
+    # looks for a file named `_git-trees` on fpath for the standalone binary.
+    bash_completion.install "completions/git-trees.bash"
+    zsh_completion.install "completions/_git-trees"
     # TREES_AGENTS_TEMPLATE defaults to ~/.config/git-trees/AGENTS.md, which a
     # formula must not write. Stage the template in the prefix and let caveats
     # tell the user how to put it in place.
@@ -17,15 +22,16 @@ class GitTrees < Formula
     <<~EOS
       `git trees init` and `git trees root --agents` seed an AGENTS.md at the
       container root from TREES_AGENTS_TEMPLATE, which defaults to
-      ~/.config/git-trees/AGENTS.md. Formulae cannot write there, so copy the
-      bundled template yourself:
+      ~/.config/git-trees/AGENTS.md. Formulae cannot write there, so point the
+      variable at the bundled template from your shell rc:
+
+        export TREES_AGENTS_TEMPLATE=#{pkgshare}/AGENTS.md.template
+
+      That copy tracks the installed version. To edit your own instead, copy it
+      to the default path — a copy will not pick up later upgrades:
 
         mkdir -p ~/.config/git-trees
         cp #{pkgshare}/AGENTS.md.template ~/.config/git-trees/AGENTS.md
-
-      Or point TREES_AGENTS_TEMPLATE at the bundled copy instead:
-
-        export TREES_AGENTS_TEMPLATE=#{pkgshare}/AGENTS.md.template
     EOS
   end
 

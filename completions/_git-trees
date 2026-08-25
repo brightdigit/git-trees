@@ -21,7 +21,12 @@ __git_trees_targets() {
     ${(f)"$(git for-each-ref --format='%(refname:short)' refs/heads 2>/dev/null)"}
     ${(f)"$(__git_trees_worktree_names)"}
   )
-  _describe -t targets 'branch or worktree' "${(@u)targets}"
+  # `_describe` takes the *name* of an array, not its values: it dereferences
+  # each argument as a parameter. Passing the expansion makes it look up branch
+  # names as parameters, which are empty, and completion silently offers
+  # nothing. Dedupe in place, then pass the name.
+  targets=( ${(u)targets} )
+  _describe -t targets 'branch or worktree' targets
 }
 
 __git_trees_worktrees() {

@@ -63,8 +63,23 @@ worktree removal or branch delete, but the exit status is nonzero if any failed,
 matching `cmd_rm`. Do not turn that back into an unconditional `return 0` —
 scripting `clean` depends on it.
 
+**`sync` fetches once for the whole container.** Every worktree shares one
+object store, so a per-worktree fetch transfers nothing after the first — the
+single fetch is the design, not an optimisation to unroll. The default strategy
+is `--ff-only`; `--rebase` is opt-in, and a strategy without `--pull` is
+rejected rather than silently ignored, since `sync --rebase` that only fetched
+would look like it had rebased. Like `clean`, the loop runs to completion and
+returns nonzero if any worktree was skipped, so a nonzero exit means partial
+success, not a stop. A detached HEAD is reported but deliberately not counted
+as a failure.
 
-
+**`_sync_target` gates on worktree registration too**, but for a different
+reason than `cmd_rm`'s: not to keep `TREES_RM_CMD` away from the container
+root — `sync` never removes anything — but because an existing directory git
+does not know as a worktree would otherwise resolve to a real path, match
+nothing in the pull loop, and exit 0 having done nothing. A silent no-op is
+worse than an error, so the unregistered case must keep reporting `is not a
+worktree`.
 
 **`track` only ever sets `origin/<branch>`.** Same remote, same name. There is
 no flag for an arbitrary upstream, and `origin` is hardcoded throughout —
@@ -179,6 +194,24 @@ What the suite covers:
   fresh branch preservation, dry run vs `--apply`, worktree directories actually
   gone after `--apply`, each selector run on its own, and custom `TREES_RM_CMD`
   routing
+- **sync** — fetch-only advancing the remote-tracking ref while leaving the
+  worktree `HEAD` and files alone; `--pull` fast-forwarding and naming the
+  branch on stdout; a dirty worktree skipped with the upstream change *not*
+  applied over it; `--rebase` keeping the local commit and applying the upstream
+  one with no rebase left in progress; the mutually-exclusive and
+  strategy-without-`--pull` argument errors; and an **existing directory that is
+  not a registered worktree** rejected rather than exiting 0 silently
+- **prune** — a clean container reporting nothing to prune on stderr and
+  nothing on stdout, a worktree directory deleted behind git's back leaving a
+  stale entry, `--dry-run` naming it without unlinking, the branch left intact
+  after the metadata is cleared, idempotency on a second run, and a live
+  worktree left registered
+- **completions** — installed by `install.sh` byte-identical to the source and
+  never clobbered on rerun; the bash file defining `_git_trees`, offering
+  subcommands, the `ls` alias, and per-subcommand flags; routing through
+  `__gitcomp` when git's completion provides it; and staying empty and quiet
+  outside a repository. The zsh file is covered only as an installed artifact —
+  driving zsh's completion system needs a `zpty` harness the suite does not have
 
 Two assertion shapes are easy to get wrong:
 

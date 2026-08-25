@@ -89,17 +89,16 @@ as you found it if this was only a verification:
 brew uninstall git-trees
 ```
 
-## Follow-up: shell completions
+## Formula contents
 
-Once shell completions ship (PR #51, targeted at v1.0.3), the completion files
-are part of the release tarball and the formula's `install` block should install
-them:
+The formula installs the script, both completion files, and the agents
+template. The completion lines are only safe while the formula's `url` points
+at a tag that actually contains `completions/` — referencing files missing from
+the tarball breaks `brew install` outright. Completions shipped in v1.0.3, so
+any tag from v1.0.3 on satisfies that; a formula rolled back to an earlier tag
+would have to drop them again.
 
-```ruby
-bash_completion.install "completions/git-trees.bash"
-zsh_completion.install "completions/_git-trees" => "_git-trees"
-```
-
-Add those lines only in the formula revision whose `url` points at a tag that
-actually contains `completions/` — referencing files missing from the tarball
-breaks `brew install` outright.
+The template is staged in the prefix rather than written to
+`~/.config/git-trees/AGENTS.md`, because a formula must not write outside its
+own prefix. The `caveats` block tells the user to point
+`TREES_AGENTS_TEMPLATE` at the bundled copy.

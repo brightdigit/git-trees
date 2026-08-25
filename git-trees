@@ -736,10 +736,12 @@ cmd_rm() {
 
 # --- sync --------------------------------------------------------------------
 
-# Resolve a positional target to a worktree path. Local to sync on purpose:
-# cmd_rm's resolution carries a worktree-registration gate that exists to keep a
-# custom TREES_RM_CMD away from the container root, a concern sync does not have,
-# and its messages name `git trees rm`.
+# Resolve a positional target to a worktree path. Local to sync on purpose: its
+# messages name `git trees sync`, and cmd_rm's gate guards a different hazard —
+# keeping a custom TREES_RM_CMD away from the container root. The gate here
+# earns its place for its own reason: without it an existing directory git does
+# not know as a worktree resolves to a real path, matches nothing in the pull
+# loop, and sync exits 0 having done nothing.
 _sync_target() {   # _sync_target <branch|path> -> worktree path, or empty
   local target="$1" path=""
 
@@ -749,6 +751,10 @@ _sync_target() {   # _sync_target <branch|path> -> worktree path, or empty
     # `pwd -P`, not `pwd`: git records worktrees by physical path, so a logical
     # one (macOS /var -> /private/var) would match nothing in the loop below.
     path=$(cd "$target" 2>/dev/null && pwd -P)
+    if [ -n "$path" ] \
+      && ! git worktree list --porcelain | grep -qxF "worktree $path"; then
+      path=""
+    fi
   fi
 
   [ -n "$path" ] && printf '%s\n' "$path"

@@ -9,10 +9,6 @@ on:
         description: Release tag to publish (e.g. v1.0.3)
         required: true
         type: string
-  # Temporary: exercise the tap push from this PR branch (workflow_dispatch
-  # only works once the workflow exists on the default branch).
-  push:
-    branches: [49-homebrew]
 
 permissions:
   contents: write
@@ -35,7 +31,16 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          # A release event checks out the tag, which leaves HEAD detached, and
+          # both `git push` below and `git subrepo push` refuse to run that way
+          # (subrepo errors outright: "Must be on a branch to run this command").
+          # Read the default branch rather than hardcoding it so a rename here
+          # does not silently start pushing the bump to a stale branch.
+          ref: ${{ github.event.repository.default_branch }}
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          # Explicit: the bump commit and the subrepo push both reuse this
+          # credential, so the token has to survive the checkout step.
+          persist-credentials: true
 
       - name: Install git-subrepo
         run: |
@@ -44,13 +49,17 @@ jobs:
 
       - name: Resolve tag
         id: meta
+        # Via env, not `${{ }}` inside the script: a tag is attacker-influenced
+        # text, and the checkout above persisted a write-capable PAT.
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
-          case "${{ github.event_name }}" in
-            workflow_dispatch) tag='${{ inputs.tag }}' ;;
-            release) tag='${{ github.event.release.tag_name }}' ;;
-            push) tag=$(git tag -l 'v*' --sort=-v:refname | head -n1) ;;
+          case "$GITHUB_EVENT_NAME" in
+            workflow_dispatch) tag="$INPUT_TAG" ;;
+            release) tag="$RELEASE_TAG" ;;
             *)
-              echo "Unsupported event: ${{ github.event_name }}" >&2
+              echo "Unsupported event: $GITHUB_EVENT_NAME" >&2
               exit 1
               ;;
           esac
@@ -59,43 +68,54 @@ jobs:
             exit 1
           fi
           case "$tag" in
-            v*) ;;
+            v[0-9]*) ;;
             *)
-              echo "Expected a v-prefixed tag, got: $tag" >&2
+              echo "Expected a v-prefixed version tag, got: $tag" >&2
               exit 1
               ;;
           esac
-          url="https://github.com/${{ github.repository }}/archive/refs/tags/${tag}.tar.gz"
+          # The tag reaches a URL and a commit message, so allow only characters
+          # inert in both. `/` is legal in a git ref but would build a wrong
+          # archive URL rather than fail cleanly, so it is excluded too.
+          case "$tag" in
+            *[!A-Za-z0-9._-]*)
+              echo "Tag has unexpected characters: $tag" >&2
+              exit 1
+              ;;
+          esac
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "url=https://github.com/$GITHUB_REPOSITORY/archive/refs/tags/${tag}.tar.gz" >> "$GITHUB_OUTPUT"
 
       - name: Bump formula url and sha256
+        env:
+          URL: ${{ steps.meta.outputs.url }}
         run: |
-          tag='${{ steps.meta.outputs.tag }}'
-          url='${{ steps.meta.outputs.url }}'
           formula=homebrew-tap/Formula/git-trees.rb
 
           # curl -f fails on a missing tag instead of hashing a 404 body.
-          sha=$(curl -fsSL "$url" | sha256sum | awk '{ print $1 }')
+          sha=$(curl -fsSL "$URL" | sha256sum | awk '{ print $1 }')
           echo "sha256=$sha"
 
-          # Pass values via ENV so / in the URL cannot break s/// delimiters.
-          URL="$url" perl -i -pe 's/^(\s*url\s+)"[^"]*"/$1"$ENV{URL}"/' "$formula"
+          # Read via %ENV so / in the URL cannot break the s/// delimiters.
+          # URL is already exported by the step's `env:`; SHA is computed here.
+          perl -i -pe 's/^(\s*url\s+)"[^"]*"/$1"$ENV{URL}"/' "$formula"
           SHA="$sha" perl -i -pe 's/^(\s*sha256\s+)"[^"]*"/$1"$ENV{SHA}"/' "$formula"
 
-          grep -F "url \"$url\"" "$formula"
+          grep -F "url \"$URL\"" "$formula"
           grep -F "sha256 \"$sha\"" "$formula"
           ruby -c "$formula"
 
       - name: Commit formula bump
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add homebrew-tap/Formula/git-trees.rb
           if git diff --staged --quiet; then
-            echo "Formula already at ${{ steps.meta.outputs.tag }}; nothing to commit"
+            echo "Formula already at $TAG; nothing to commit"
           else
-            git commit -m "homebrew: git-trees ${{ steps.meta.outputs.tag }}"
+            git commit -m "homebrew: git-trees $TAG"
             git push
           fi
 

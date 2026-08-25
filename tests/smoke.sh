@@ -975,6 +975,18 @@ assert_contains "sync explains that a strategy needs --pull" "$out" "requires --
 assert_fail "sync rejects an unknown option" bash "$T" sync --nope
 assert_fail "sync rejects a second positional" bash "$T" sync feature-x extra
 assert_fail "sync rejects a nonexistent target" bash "$T" sync definitely-not-a-worktree
+
+# An existing directory git does not know as a worktree. Without the
+# registration gate in _sync_target this resolved to a real path, matched no
+# worktree in the pull loop, and exited 0 having done nothing — the silent
+# no-op is the regression, so assert the exit status and the message.
+mkdir -p not-a-worktree
+assert_fail "sync rejects an unregistered directory" \
+  bash "$T" sync not-a-worktree --pull
+out=$(bash "$T" sync not-a-worktree --pull 2>&1 >/dev/null)
+assert_contains "sync names the unregistered directory" "$out" "is not a worktree"
+rmdir not-a-worktree
+
 assert_fail "sync outside a repo" in_dir "$TMP/plain" bash "$T" sync
 # --- prune -------------------------------------------------------------------
 

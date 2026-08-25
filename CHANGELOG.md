@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.0.3
+
+## What's Changed
+
+* Add `sync` subcommand for fetching and updating worktrees by @leogdion in https://github.com/brightdigit/git-trees/issues/50
+* Add `prune` subcommand for clearing stale worktree metadata by @leogdion in https://github.com/brightdigit/git-trees/issues/55
+* Add bash and zsh completions by @leogdion in https://github.com/brightdigit/git-trees/issues/51
+* Add a one-line curl install by @leogdion in https://github.com/brightdigit/git-trees/issues/54
+* Fix `add` creating the base branch instead of the requested one when the base exists only on the remote by @leogdion in https://github.com/brightdigit/git-trees/issues/61
+* Add Homebrew formula and release automation by @leogdion in https://github.com/brightdigit/git-trees/issues/49
+
+**Full Changelog**: https://github.com/brightdigit/git-trees/compare/v1.0.2...v1.0.3
+
 ## v1.0.2
 
 ## What's Changed
