@@ -1,80 +1,79 @@
 # Releasing
 
-There is no release automation. Tags are cut by hand, and the Homebrew formula
-is updated by hand to match. This file is the process.
+There is no release automation for cutting tags — those are still done by hand.
+Once a GitHub release is published, `.github/workflows/homebrew-tap.yml` bumps
+the formula and pushes it to the tap via the
+[`homebrew-tap/`](../homebrew-tap) [git subrepo](https://github.com/ingydotnet/git-subrepo).
 
-`Formula/git-trees.rb` in this repo is the **source of truth** for the formula,
-but Homebrew never reads it from here. It takes effect only once it is copied
-into the tap repo, [`brightdigit/homebrew-tap`](https://github.com/brightdigit/homebrew-tap),
-which is what `brew tap brightdigit/tap` clones.
+`homebrew-tap/Formula/git-trees.rb` in this repo is the **source of truth** for
+the formula. Homebrew installs it from
+[`brightdigit/homebrew-tap`](https://github.com/brightdigit/homebrew-tap), which
+is what `brew tap brightdigit/tap` clones.
 
-## 1. Cut and push the tag
+## One-time setup
 
-Update `CHANGELOG.md` with the new version's `## What's Changed` section first,
-then tag the release commit:
+### 1. Embed the tap as a subrepo
+
+From a commit that already contains `homebrew-tap/Formula/git-trees.rb`:
+
+```bash
+git subrepo init homebrew-tap \
+  -r https://github.com/brightdigit/homebrew-tap.git \
+  -b main
+git subrepo push homebrew-tap
+```
+
+`init` records `homebrew-tap/.gitrepo`; `push` populates the (possibly empty)
+tap remote. Requires push access to `brightdigit/homebrew-tap`.
+
+### 2. Repository secret
+
+Add a `HOMEBREW_TAP_TOKEN` secret on `brightdigit/git-trees`: a classic PAT or
+fine-grained token with `contents: write` on both `brightdigit/git-trees` and
+`brightdigit/homebrew-tap`. The workflow uses it to commit the formula bump here
+and to `git subrepo push` the tap.
+
+## Cut a release
+
+Update `CHANGELOG.md` with the new version's `## What's Changed` section, then:
 
 ```bash
 git tag -a v1.0.3 -m "v1.0.3"
 git push origin v1.0.3
 ```
 
-GitHub generates the source tarball for the tag automatically at
-`https://github.com/brightdigit/git-trees/archive/refs/tags/v1.0.3.tar.gz`.
+Create the GitHub release for that tag (or publish from the tag). The
+`Homebrew tap` workflow then:
 
-## 2. Compute the sha256 of the new tarball
+1. Downloads `https://github.com/brightdigit/git-trees/archive/refs/tags/v1.0.3.tar.gz`
+2. Rewrites `url` / `sha256` in `homebrew-tap/Formula/git-trees.rb`
+3. Commits and pushes that bump to this repo
+4. Runs `git subrepo push homebrew-tap`
 
-Wait for the tag to appear on GitHub, then hash the tarball:
+To re-run for an existing tag: **Actions → Homebrew tap → Run workflow** and
+pass the tag (e.g. `v1.0.3`).
 
-```bash
-curl -fsSL https://github.com/brightdigit/git-trees/archive/refs/tags/v1.0.3.tar.gz \
-  | shasum -a 256
-```
+## Manual fallback
 
-`curl -f` makes a missing tag fail rather than hashing a 404 body — without it
-you get a plausible-looking hash for the wrong bytes. If you want to be sure,
-download to a file and check the contents:
-
-```bash
-curl -fsSL -o /tmp/git-trees.tar.gz \
-  https://github.com/brightdigit/git-trees/archive/refs/tags/v1.0.3.tar.gz
-tar tzf /tmp/git-trees.tar.gz     # should list git-trees, AGENTS.md.template, LICENSE
-shasum -a 256 /tmp/git-trees.tar.gz
-```
-
-## 3. Bump the formula in this repo
-
-Edit `Formula/git-trees.rb` and update both fields together — a stale `sha256`
-against a new `url` fails every install with a checksum mismatch:
-
-- `url` → the new tag's tarball
-- `sha256` → the hash from step 2
-
-Check it before committing:
+If the workflow cannot run, bump and push by hand:
 
 ```bash
-ruby -c Formula/git-trees.rb
-brew style Formula/git-trees.rb
-```
+tag=v1.0.3
+url="https://github.com/brightdigit/git-trees/archive/refs/tags/${tag}.tar.gz"
+sha=$(curl -fsSL "$url" | shasum -a 256 | awk '{ print $1 }')
 
-Commit the bump to `main`.
+# edit homebrew-tap/Formula/git-trees.rb — set url and sha256 together
+ruby -c homebrew-tap/Formula/git-trees.rb
+brew style homebrew-tap/Formula/git-trees.rb
 
-## 4. Copy the formula into the tap
-
-`brew audit` requires a formula that lives in a tap, so run it after copying:
-
-```bash
-git clone git@github.com:brightdigit/homebrew-tap.git
-cp Formula/git-trees.rb homebrew-tap/Formula/git-trees.rb
-cd homebrew-tap
+# optional: audit requires the formula to live in a tap checkout
+git subrepo push homebrew-tap
+brew untap brightdigit/tap 2>/dev/null
+brew tap brightdigit/tap
 brew audit --strict --formula brightdigit/tap/git-trees
-git add Formula/git-trees.rb
-git commit -m "git-trees 1.0.3"
-git push
 ```
 
-## 5. Verify with brew install
-
-From a clean state, install through the tap the way a user would:
+## Verify with brew install
 
 ```bash
 brew untap brightdigit/tap 2>/dev/null   # ensure a fresh clone

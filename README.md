@@ -139,9 +139,11 @@ fi
 stable script and template.
 
 **Homebrew.** Not yet published — the formula lives at
-[`Formula/git-trees.rb`](Formula/git-trees.rb) in this repo and takes effect
-once it is pushed to the tap (see [`docs/RELEASING.md`](docs/RELEASING.md)).
-After that:
+[`homebrew-tap/Formula/git-trees.rb`](homebrew-tap/Formula/git-trees.rb) (a
+[git subrepo](https://github.com/ingydotnet/git-subrepo) of
+[`brightdigit/homebrew-tap`](https://github.com/brightdigit/homebrew-tap)) and
+takes effect once it is pushed to the tap (see
+[`docs/RELEASING.md`](docs/RELEASING.md)). After that:
 
 ```bash
 brew tap brightdigit/tap
