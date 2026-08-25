@@ -9,6 +9,10 @@ on:
         description: Release tag to publish (e.g. v1.0.3)
         required: true
         type: string
+  # Temporary: exercise the tap push from this PR branch (workflow_dispatch
+  # only works once the workflow exists on the default branch).
+  push:
+    branches: [49-homebrew]
 
 permissions:
   contents: write
@@ -41,10 +45,18 @@ jobs:
       - name: Resolve tag
         id: meta
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            tag='${{ inputs.tag }}'
-          else
-            tag='${{ github.event.release.tag_name }}'
+          case "${{ github.event_name }}" in
+            workflow_dispatch) tag='${{ inputs.tag }}' ;;
+            release) tag='${{ github.event.release.tag_name }}' ;;
+            push) tag=$(git tag -l 'v*' --sort=-v:refname | head -n1) ;;
+            *)
+              echo "Unsupported event: ${{ github.event_name }}" >&2
+              exit 1
+              ;;
+          esac
+          if [ -z "$tag" ]; then
+            echo "No tag to publish" >&2
+            exit 1
           fi
           case "$tag" in
             v*) ;;
