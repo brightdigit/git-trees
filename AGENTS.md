@@ -48,7 +48,7 @@ consequence is that `feature/x` and `feature-x` compete for one directory;
 the directory (`_branch_at`). Do not "fix" that by inventing a suffixed variant:
 a directory whose name the user cannot predict is worse than an error.
 
-**Nothing destructive without `--apply`.** `rm` and `clean` report by default and modify state only when `--apply` is explicitly passed. Local branch deletions use `git branch -d` (falling back to `-D` on `clean` once confirmed gone/merged, or on `rm` when `--apply` is passed), and worktree directory removals route through `TREES_RM_CMD` when configured (defaulting to `git worktree remove`).
+**Nothing that can lose work without `--apply`.** `rm` and `clean` report by default and modify state only when `--apply` is explicitly passed. Local branch deletions use `git branch -d` (falling back to `-D` on `clean` once confirmed gone/merged, or on `rm` when `--apply` is passed), and worktree directory removals route through `TREES_RM_CMD` when configured (defaulting to `git worktree remove`). `prune` is the deliberate exception: it only unlinks metadata for worktree directories already gone from disk, leaving the branch intact, so there is nothing to lose and it acts immediately with only a `--dry-run` preview.
 
 **`TREES_RM_CMD` is the one place the safety net comes off.** `git worktree
 remove` refuses a worktree with uncommitted changes or untracked files; a custom
