@@ -79,9 +79,9 @@ jobs:
           sha=$(curl -fsSL "$url" | sha256sum | awk '{ print $1 }')
           echo "sha256=$sha"
 
-          # Replace only the formula url/sha256 string values.
-          perl -i -pe "s/^(\\s*url\\s+)\"[^\"]*\"/\${1}\"$url\"/" "$formula"
-          perl -i -pe "s/^(\\s*sha256\\s+)\"[^\"]*\"/\${1}\"$sha\"/" "$formula"
+          # Pass values via ENV so / in the URL cannot break s/// delimiters.
+          URL="$url" perl -i -pe 's/^(\s*url\s+)"[^"]*"/$1"$ENV{URL}"/' "$formula"
+          SHA="$sha" perl -i -pe 's/^(\s*sha256\s+)"[^"]*"/$1"$ENV{SHA}"/' "$formula"
 
           grep -F "url \"$url\"" "$formula"
           grep -F "sha256 \"$sha\"" "$formula"
