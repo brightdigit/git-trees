@@ -148,6 +148,52 @@ case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *)
 `install.sh` warns if it isn't; the curl path cannot. Anything on `PATH` named
 `git-trees` becomes `git trees`.
 
+### Shell completions
+
+`install.sh` copies both completion files to `~/.config/git-trees/completions/`
+and prints the activation line for each. It never overwrites a copy you have
+edited, so a reinstall keeps your changes.
+
+**bash** — source the file from `~/.bashrc`, after bash-completion itself:
+
+```bash
+source ~/.config/git-trees/completions/git-trees.bash
+```
+
+**zsh** — source the same bash file from `~/.zshrc` (after oh-my-zsh /
+`bashcompinit` if you use them):
+
+```zsh
+source ~/.config/git-trees/completions/git-trees.bash
+```
+
+Homebrew's `git` completion is a bash wrapper: it dispatches `git trees` to a
+function named `_git_trees`, so the bash file is what `git trees <TAB>` needs.
+Putting only `completions/` on `fpath` wires up the standalone `git-trees`
+binary under stock zsh `_git`, but is not enough for Homebrew.
+
+Completion covers every subcommand and its own flags, and completes branch and
+worktree names for `rm` from git itself. Outside a repository it stays silent
+rather than erroring.
+
+**If you installed via the curl path**, `install.sh` never ran, so fetch the
+files yourself first:
+
+```bash
+mkdir -p ~/.config/git-trees/completions
+for f in git-trees.bash _git-trees; do
+  curl -fsSL -o ~/.config/git-trees/completions/"$f" \
+    https://raw.githubusercontent.com/brightdigit/git-trees/main/completions/"$f"
+done
+```
+
+Then add the `source` line above.
+
+The filenames are load-bearing. Git's completion dispatches `git trees` to a
+function named `_git_trees`, and stock zsh's `_git` also looks for a file named
+`_git-trees` on `fpath` for the standalone binary — renaming either one
+silently disables completion.
+
 ## Configuration
 
 All three variables are optional. Add to `~/.zshrc` (or `~/.bashrc`):

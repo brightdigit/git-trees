@@ -16,7 +16,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Syntax check
-        run: bash -n git-trees && bash -n install.sh && bash -n tests/smoke.sh
+        run: bash -n git-trees && bash -n install.sh && bash -n tests/smoke.sh && bash -n completions/git-trees.bash
 
       - name: Install ShellCheck
         run: |
@@ -27,7 +27,7 @@ jobs:
           fi
 
       - name: ShellCheck
-        run: shellcheck -s bash git-trees install.sh tests/smoke.sh
+        run: shellcheck -s bash git-trees install.sh tests/smoke.sh completions/git-trees.bash
 
       - name: Smoke tests
         run: tests/smoke.sh ./git-trees
