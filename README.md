@@ -273,6 +273,60 @@ directory.
 > you want `git worktree remove --force` semantics deliberately.
 
 
+### `git trees sync [worktree] [--pull] [--ff-only|--rebase]`
+
+Brings the container up to date with `origin`. With no positional argument it
+covers every worktree; passing one names a single worktree, by branch name or by
+path.
+
+**The default is fetch only** — it runs one `git fetch --prune origin` and stops.
+Nothing in any working tree is touched, so there is no `--apply` gate: the
+command acts immediately. Every worktree shares a single object store, so one
+fetch updates the remote-tracking refs for all of them; fetching per worktree
+would transfer nothing after the first and cost only round-trips.
+
+`--pull` then updates the working trees from the refs that fetch just brought in.
+
+| Strategy | Behavior |
+|---|---|
+| `--ff-only` (default) | `git merge --ff-only @{upstream}`; refuses to touch a diverged branch |
+| `--rebase` | `git rebase @{upstream}`; replays local commits on top of the upstream |
+
+`--ff-only` is the default because it is the only update that can neither discard
+work nor stop half-finished. The two are mutually exclusive, and passing either
+without `--pull` is an error rather than a silent no-op — `sync --rebase` that
+only fetched would look like it had rebased.
+
+There is no `git pull` under the hood, deliberately: `pull` re-fetches on every
+invocation, which would undo the single-fetch design. `merge --ff-only` and
+`rebase` against `@{upstream}` need no fetch of their own and are idempotent.
+
+Under `--pull`, a worktree is skipped when:
+
+| Situation | Behavior |
+|---|---|
+| Detached HEAD | Reported on stderr, **not** counted as a failure — detaching is deliberate |
+| No upstream | Reported, with `git trees track` named as the remedy; counted as a failure |
+| Uncommitted changes | Reported and skipped; counted as a failure |
+| Diverged under `--ff-only` | Reported, with `--rebase` named as the remedy; counted as a failure |
+| Rebase conflict | Reported; the worktree is **left mid-rebase** so you can resolve it, or run `git rebase --abort` |
+
+Dirtiness includes untracked files, matching the `dirty` column in
+[`git trees list`](#git-trees-list---json) and `git worktree remove`'s own
+refusal — so a stray `.DS_Store` is enough to skip a pull.
+
+The branch name of each successfully updated worktree goes to stdout, one per
+line; every notice, warning, and error goes to stderr. `sync` exits nonzero if
+any worktree was skipped for a reason above other than a detached HEAD, or if the
+fetch itself failed — in which case nothing is pulled. The loop always runs to
+completion, so a nonzero exit means partial success, not a stop.
+
+```bash
+git trees sync                            # fetch origin, touch nothing
+git trees sync --pull                     # fast-forward every clean, tracked worktree
+git trees sync feature-x --pull --rebase  # rebase one worktree onto its upstream
+```
+
 ### `git trees clean [--merged|--gone] [--apply]`
 
 Reports or removes stale worktrees and branches.
