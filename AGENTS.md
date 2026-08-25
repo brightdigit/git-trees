@@ -48,7 +48,7 @@ consequence is that `feature/x` and `feature-x` compete for one directory;
 the directory (`_branch_at`). Do not "fix" that by inventing a suffixed variant:
 a directory whose name the user cannot predict is worse than an error.
 
-**Nothing destructive without `--apply`.** `rm` and `clean` report by default and modify state only when `--apply` is explicitly passed. Local branch deletions use `git branch -d` (falling back to `-D` on `clean` once confirmed gone/merged, or on `rm` when `--apply` is passed), and worktree directory removals route through `TREES_RM_CMD` when configured (defaulting to `git worktree remove`).
+**Nothing that can lose work without `--apply`.** `rm` and `clean` report by default and modify state only when `--apply` is explicitly passed. Local branch deletions use `git branch -d` (falling back to `-D` on `clean` once confirmed gone/merged, or on `rm` when `--apply` is passed), and worktree directory removals route through `TREES_RM_CMD` when configured (defaulting to `git worktree remove`). `prune` is the deliberate exception: it only unlinks metadata for worktree directories already gone from disk, leaving the branch intact, so there is nothing to lose and it acts immediately with only a `--dry-run` preview.
 
 **`TREES_RM_CMD` is the one place the safety net comes off.** `git worktree
 remove` refuses a worktree with uncommitted changes or untracked files; a custom
@@ -63,8 +63,23 @@ worktree removal or branch delete, but the exit status is nonzero if any failed,
 matching `cmd_rm`. Do not turn that back into an unconditional `return 0` —
 scripting `clean` depends on it.
 
+**`sync` fetches once for the whole container.** Every worktree shares one
+object store, so a per-worktree fetch transfers nothing after the first — the
+single fetch is the design, not an optimisation to unroll. The default strategy
+is `--ff-only`; `--rebase` is opt-in, and a strategy without `--pull` is
+rejected rather than silently ignored, since `sync --rebase` that only fetched
+would look like it had rebased. Like `clean`, the loop runs to completion and
+returns nonzero if any worktree was skipped, so a nonzero exit means partial
+success, not a stop. A detached HEAD is reported but deliberately not counted
+as a failure.
 
-
+**`_sync_target` gates on worktree registration too**, but for a different
+reason than `cmd_rm`'s: not to keep `TREES_RM_CMD` away from the container
+root — `sync` never removes anything — but because an existing directory git
+does not know as a worktree would otherwise resolve to a real path, match
+nothing in the pull loop, and exit 0 having done nothing. A silent no-op is
+worse than an error, so the unregistered case must keep reporting `is not a
+worktree`.
 
 **`track` only ever sets `origin/<branch>`.** Same remote, same name. There is
 no flag for an arbitrary upstream, and `origin` is hardcoded throughout —
@@ -80,6 +95,21 @@ unconditionally, and would otherwise overwrite what the user asked for.
 created from `origin/main` silently gets `origin/main` as its upstream and will
 push there. The new-branch path must pass `--no-track`, then let `cmd_track` set
 the correct upstream. Live in `cmd_add`; any change there needs a fresh test.
+
+## Git pitfall: a start-point can override `-b`
+
+`git worktree add --no-track -b <new> <dir> <base>` does **not** guarantee a
+worktree on `<new>`. When `<base>` is a bare name matching a branch that exists
+only on the remote, git's DWIM reads it as "create a local branch tracking
+`origin/<base>`" and overrides `-b <new>` entirely: the worktree comes up on
+`<base>`, `<new>` is never created, a stray local `<base>` ref is left to go
+stale, and the exit status is 0. `--no-track` does not help — it governs the
+upstream, not the branch name.
+
+`cmd_add` resolves the base through `_base_sha` first (local commit-ish, else
+`origin/<base>`) and passes the sha, which leaves nothing for the DWIM to latch
+onto, and then asserts the new worktree's `HEAD` really is `<br>`. Keep both:
+the resolution is the fix, the assertion is what makes a future regression loud.
 
 ## Git pitfall: worktree paths are physical
 
@@ -129,6 +159,10 @@ What the suite covers:
   exactly `origin/feature-x` for an existing remote branch and exactly
   `origin/brandnew` for a new one; directory collision; `--print-path` emitting
   only a path; argument errors; nonzero exit when `track`/push fails
+- **add with a remote-only base** — the worktree lands on the requested branch
+  (not the base), starts at `origin/<base>`, leaves no stray local ref, and
+  tracks its own remote; an explicit `origin/<base>` behaves identically; an
+  unresolvable base fails and creates no worktree
 - **add with a slash in the branch** — the directory is slugged (`feature/x` →
   `feature-x/`, `deep/new/branch` → `deep-new-branch/`) while the ref keeps its
   slash and tracks `origin/feature/x`; a second branch slugging to a taken
@@ -139,7 +173,17 @@ What the suite covers:
   through `json.load`
 - **install.sh** — places the binary; seeds `~/.config/git-trees/AGENTS.md` from
   the template under a redirected `HOME`; does not overwrite an existing config
-  file
+  file; honours `TREES_DEST`, with a positional argument still winning over it
+- **install.sh — no-repo bootstrap** — the `curl | bash` path, with
+  `TREES_BASE_URL` pointed at a `file://` fixture so the real download branch
+  runs without touching the network: piped on stdin from a directory with no
+  `git-trees` in it (piped bash has neither `BASH_SOURCE` nor `$1`, and `set -u`
+  makes a bare reference to either fatal), the `wget` fallback on a `PATH` built
+  without `curl`, a clear error when neither downloader exists, a **zero-byte
+  body** rejected (the transfer succeeds, so only the non-empty check catches
+  it), a missing script failing loudly and installing nothing, a missing
+  template warning while the binary still installs, no-clobber on rerun, and the
+  temp download directory cleaned up by its trap
 - **rm** — dry run vs `--apply`, worktree removal by branch and by path (a
   slugged directory whose name is not a branch name, so the path arm is the one
   that runs), `-d` escalating to `-D` so an unmerged branch is still deleted
@@ -150,6 +194,24 @@ What the suite covers:
   fresh branch preservation, dry run vs `--apply`, worktree directories actually
   gone after `--apply`, each selector run on its own, and custom `TREES_RM_CMD`
   routing
+- **sync** — fetch-only advancing the remote-tracking ref while leaving the
+  worktree `HEAD` and files alone; `--pull` fast-forwarding and naming the
+  branch on stdout; a dirty worktree skipped with the upstream change *not*
+  applied over it; `--rebase` keeping the local commit and applying the upstream
+  one with no rebase left in progress; the mutually-exclusive and
+  strategy-without-`--pull` argument errors; and an **existing directory that is
+  not a registered worktree** rejected rather than exiting 0 silently
+- **prune** — a clean container reporting nothing to prune on stderr and
+  nothing on stdout, a worktree directory deleted behind git's back leaving a
+  stale entry, `--dry-run` naming it without unlinking, the branch left intact
+  after the metadata is cleared, idempotency on a second run, and a live
+  worktree left registered
+- **completions** — installed by `install.sh` byte-identical to the source and
+  never clobbered on rerun; the bash file defining `_git_trees`, offering
+  subcommands, the `ls` alias, and per-subcommand flags; routing through
+  `__gitcomp` when git's completion provides it; and staying empty and quiet
+  outside a repository. The zsh file is covered only as an installed artifact —
+  driving zsh's completion system needs a `zpty` harness the suite does not have
 
 Two assertion shapes are easy to get wrong:
 

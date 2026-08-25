@@ -144,6 +144,8 @@ assert_contains "help lists add" "$out" "add <branch>"
 assert_contains "help lists list" "$out" "list [--json]"
 assert_contains "help lists rm" "$out" "rm <branch|path>"
 assert_contains "help lists clean" "$out" "clean [--merged|--gone]"
+assert_contains "help lists sync" "$out" "sync [worktree]"
+assert_contains "help lists prune" "$out" "prune [--dry-run]"
 
 
 section "outside a repo"
@@ -361,6 +363,56 @@ assert_not_contains "list does not show it as having no worktree" \
 
 cd "$C" || exit 1
 
+# --- add with a remote-only base ---------------------------------------------
+
+# A base naming a branch that exists only on the remote used to be handed to
+# `git worktree add -b <new> <dir> <base>` verbatim, where git's DWIM turned it
+# into "create a local branch tracking origin/<base>" and overrode `-b <new>`
+# entirely: the worktree came up on <base>, <new> was never created, a stray
+# local <base> ref was left behind to go stale, and the command exited 0.
+section "add — remote-only base"
+RB=$(new_container remote-base-c)
+
+# A branch on origin that the container has never had locally: created after the
+# clone, so only the remote-tracking ref exists. Its own commit, so "based on it"
+# is distinguishable from "based on main".
+RB_SHA=$(git -C "$ORIGIN" commit-tree "$(git -C "$ORIGIN" rev-parse 'main^{tree}')" \
+  -p main -m relbase)
+git -C "$ORIGIN" branch relbase "$RB_SHA" >/dev/null 2>&1
+cd "$RB" || exit 1
+git fetch -q origin
+assert_fail "the base branch is remote-only" \
+  git show-ref --verify --quiet refs/heads/relbase
+
+assert_ok "add on a remote-only base" bash "$T" add newfromremote relbase
+assert_eq "the worktree is on the requested branch, not the base" \
+  "$(git -C newfromremote symbolic-ref --short HEAD 2>/dev/null)" "newfromremote"
+assert_eq "the new branch starts at origin/<base>" \
+  "$(git -C newfromremote rev-parse HEAD 2>/dev/null)" "$RB_SHA"
+assert_fail "no stray local branch named after the base" \
+  git show-ref --verify --quiet refs/heads/relbase
+assert_eq "the new branch tracks its own remote, not the base" \
+  "$(git -C newfromremote rev-parse --abbrev-ref '@{upstream}' 2>/dev/null)" \
+  "origin/newfromremote"
+
+# The same base spelled out explicitly must behave identically.
+assert_ok "add on an explicit origin/<base>" bash "$T" add explicitbase origin/relbase
+assert_eq "the explicit form checks out the requested branch" \
+  "$(git -C explicitbase symbolic-ref --short HEAD 2>/dev/null)" "explicitbase"
+assert_eq "the explicit form starts at that commit" \
+  "$(git -C explicitbase rev-parse HEAD 2>/dev/null)" "$RB_SHA"
+
+# A base that resolves to nothing is an error, not a worktree on something else.
+out=$(bash "$T" add frombogus no/such/base 2>&1)
+assert_fail "add on a nonexistent base fails" bash "$T" add frombogus no/such/base
+assert_contains "the error names the bad base" "$out" "no/such/base"
+assert_contains "the error suggests sync to fetch remotes" "$out" "git trees sync"
+assert_fail "no worktree was left behind for a bad base" test -e "$RB/frombogus"
+
+git -C "$ORIGIN" branch -D relbase >/dev/null 2>&1
+
+cd "$C" || exit 1
+
 # A failed upstream setup must fail `add` (the worktree may still exist).
 BROKE=$(new_container add-nopush-remote)
 cd "$BROKE" || exit 1
@@ -480,12 +532,253 @@ assert_ok "install.sh seeded the agents template" \
 assert_eq "install.sh template matches AGENTS.md.template" \
   "$(cat "$IHOME/.config/git-trees/AGENTS.md")" \
   "$(cat "$REPO/AGENTS.md.template")"
+assert_ok "install.sh installed the bash completion" \
+  test -f "$IHOME/.config/git-trees/completions/git-trees.bash"
+assert_ok "install.sh installed the zsh completion" \
+  test -f "$IHOME/.config/git-trees/completions/_git-trees"
+assert_eq "installed bash completion matches the source" \
+  "$(cat "$IHOME/.config/git-trees/completions/git-trees.bash")" \
+  "$(cat "$REPO/completions/git-trees.bash")"
+assert_eq "installed zsh completion matches the source" \
+  "$(cat "$IHOME/.config/git-trees/completions/_git-trees")" \
+  "$(cat "$REPO/completions/_git-trees")"
+assert_contains "install.sh reports where the bash completion landed" \
+  "$out" ".config/git-trees/completions/git-trees.bash"
+assert_contains "install.sh reports where the zsh completion landed" \
+  "$out" ".config/git-trees/completions/_git-trees"
+assert_contains "install.sh explains how to activate completions" \
+  "$out" "to activate completions"
+
+# The bash completion must define the function bash-completion's git driver
+# dispatches to: `git trees` -> `_git_trees` (dashes become underscores).
+out=$(bash -c '
+  source "$1" || exit 1
+  declare -f _git_trees >/dev/null || exit 1
+  COMP_WORDS=(git trees ""); COMP_CWORD=2; COMPREPLY=()
+  _git_trees
+  echo "${COMPREPLY[*]}"
+' _ "$REPO/completions/git-trees.bash" 2>&1)
+assert_contains "bash completion defines _git_trees and offers subcommands" "$out" "clean"
+assert_contains "bash completion offers the list alias" "$out" "ls"
+
+out=$(bash -c '
+  source "$1" || exit 1
+  COMP_WORDS=(git trees clean "--"); COMP_CWORD=3; COMPREPLY=()
+  _git_trees
+  echo "${COMPREPLY[*]}"
+' _ "$REPO/completions/git-trees.bash" 2>&1)
+assert_contains "bash completion offers clean flags" "$out" "--merged"
+assert_contains "bash completion offers --apply" "$out" "--apply"
+
+# Under Homebrew's zsh git wrapper, _git_trees must use __gitcomp (not
+# compgen/COMPREPLY). Stub the git-completion API and ensure we call it.
+out=$(bash -c '
+  source "$1" || exit 1
+  __gitcomp() { printf "GITCOMP:%s\n" "$1"; }
+  words=(git trees ""); cword=2; cur=""; prev=trees; __git_cmd_idx=1
+  _git_trees
+' _ "$REPO/completions/git-trees.bash" 2>&1)
+assert_contains "bash completion uses __gitcomp when available" "$out" "GITCOMP:"
+assert_contains "bash completion __gitcomp receives subcommands" "$out" "clean"
+
+# Completing outside a repository must be silent and empty, never an error.
+# The single quotes are deliberate: these expansions belong to the inner bash.
+# shellcheck disable=SC2016
+COMP_PROBE_OUTSIDE='
+  source "$1" || exit 1
+  COMP_WORDS=(git trees rm ""); COMP_CWORD=3; COMPREPLY=()
+  _git_trees
+  echo "rc=$? n=${#COMPREPLY[@]}"
+'
+out=$(in_dir "$TMP" bash -c "$COMP_PROBE_OUTSIDE" _ "$REPO/completions/git-trees.bash" 2>&1)
+assert_eq "bash completion is empty and quiet outside a repo" "$out" "rc=0 n=0"
+
 echo CUSTOM > "$IHOME/.config/git-trees/AGENTS.md"
+echo CUSTOMBASH > "$IHOME/.config/git-trees/completions/git-trees.bash"
+echo CUSTOMZSH > "$IHOME/.config/git-trees/completions/_git-trees"
 HOME="$IHOME" bash "$REPO/install.sh" "$IDEST" >/dev/null 2>&1
 rc=$?
 assert_eq "install.sh rerun exits 0" "$rc" "0"
 assert_eq "install.sh does not overwrite an existing template" \
   "$(cat "$IHOME/.config/git-trees/AGENTS.md")" "CUSTOM"
+assert_eq "install.sh does not overwrite an existing bash completion" \
+  "$(cat "$IHOME/.config/git-trees/completions/git-trees.bash")" "CUSTOMBASH"
+assert_eq "install.sh does not overwrite an existing zsh completion" \
+  "$(cat "$IHOME/.config/git-trees/completions/_git-trees")" "CUSTOMZSH"
+
+# TREES_DEST is the piped path's only way to choose a destination, but it must
+# work from a clone too, and the positional must still win over it.
+EDEST="$TMP/install-envdest"
+out=$(HOME="$IHOME" TREES_DEST="$EDEST" bash "$REPO/install.sh" 2>&1)
+rc=$?
+assert_eq "install.sh TREES_DEST exits 0" "$rc" "0"
+assert_ok "install.sh honours TREES_DEST" test -x "$EDEST/git-trees"
+PDEST="$TMP/install-posdest"
+HOME="$IHOME" TREES_DEST="$EDEST" bash "$REPO/install.sh" "$PDEST" >/dev/null 2>&1
+assert_ok "install.sh positional beats TREES_DEST" test -x "$PDEST/git-trees"
+
+# --- install.sh — no-repo bootstrap (the `curl | bash` path) -----------------
+#
+# The script is copied somewhere with no git-trees beside it, so it takes the
+# download branch. TREES_BASE_URL points at a file:// fixture: the real fetch
+# code runs, no network is touched, and the test cannot silently no-op offline.
+
+section "install.sh — no-repo bootstrap"
+SERVE="$TMP/serve"
+mkdir -p "$SERVE"
+cp "$REPO/git-trees" "$SERVE/git-trees"
+cp "$REPO/AGENTS.md.template" "$SERVE/AGENTS.md.template"
+BOOT="$TMP/boot"
+mkdir -p "$BOOT"
+cp "$REPO/install.sh" "$BOOT/install.sh"
+
+BHOME="$TMP/boot-home"
+BDEST="$TMP/boot-bin"
+mkdir -p "$BHOME"
+out=$(HOME="$BHOME" TREES_DEST="$BDEST" TREES_BASE_URL="file://$SERVE" \
+  bash "$BOOT/install.sh" 2>&1)
+rc=$?
+assert_eq "bootstrap exits 0" "$rc" "0"
+assert_contains "bootstrap announces the download" "$out" "downloading git-trees"
+assert_ok "bootstrap placed the binary" test -x "$BDEST/git-trees"
+assert_eq "bootstrap binary matches the source" \
+  "$(cat "$BDEST/git-trees")" "$(cat "$REPO/git-trees")"
+assert_ok "bootstrap binary runs" bash "$BDEST/git-trees" help
+assert_ok "bootstrap seeded the agents template" \
+  test -f "$BHOME/.config/git-trees/AGENTS.md"
+assert_eq "bootstrap template matches AGENTS.md.template" \
+  "$(cat "$BHOME/.config/git-trees/AGENTS.md")" "$(cat "$REPO/AGENTS.md.template")"
+
+# A rerun must not clobber a template the user has edited.
+echo BOOTCUSTOM > "$BHOME/.config/git-trees/AGENTS.md"
+HOME="$BHOME" TREES_DEST="$BDEST" TREES_BASE_URL="file://$SERVE" \
+  bash "$BOOT/install.sh" >/dev/null 2>&1
+rc=$?
+assert_eq "bootstrap rerun exits 0" "$rc" "0"
+assert_eq "bootstrap rerun does not overwrite the template" \
+  "$(cat "$BHOME/.config/git-trees/AGENTS.md")" "BOOTCUSTOM"
+
+# The temp download directory is trapped away on exit. A private TMPDIR makes
+# that observable: mktemp -d lands inside it, so anything left is a leak.
+SCRATCH="$TMP/boot-tmpdir"
+mkdir -p "$SCRATCH"
+HOME="$BHOME" TMPDIR="$SCRATCH" TREES_DEST="$BDEST" TREES_BASE_URL="file://$SERVE" \
+  bash "$BOOT/install.sh" >/dev/null 2>&1
+assert_eq "bootstrap cleans up its temp dir" \
+  "$(find "$SCRATCH" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')" "0"
+
+# A missing git-trees at the base URL must fail loudly, not install nothing
+# quietly. `curl -fsSL` fails on HTTP errors; file:// fails on a missing path.
+EMPTY="$TMP/serve-empty"
+mkdir -p "$EMPTY"
+FHOME="$TMP/boot-fail-home"
+FDEST="$TMP/boot-fail-bin"
+mkdir -p "$FHOME"
+out=$(HOME="$FHOME" TREES_DEST="$FDEST" TREES_BASE_URL="file://$EMPTY" \
+  bash "$BOOT/install.sh" 2>&1)
+rc=$?
+assert_eq "bootstrap fails when git-trees is missing" "$rc" "1"
+assert_contains "bootstrap says why it failed" "$out" "failed to download git-trees"
+assert_fail "bootstrap installed nothing on failure" test -e "$FDEST/git-trees"
+
+# The actual `curl ... | bash` shape: piped on stdin, from a directory with no
+# git-trees in it. Piped bash has no BASH_SOURCE and no $1, and `set -u` makes a
+# bare reference to either fatal — a copied-file test cannot catch that.
+PHOME="$TMP/boot-piped-home"
+PPDEST="$TMP/boot-piped-bin"
+mkdir -p "$PHOME" "$TMP/boot-piped-cwd"
+out=$(in_dir "$TMP/boot-piped-cwd" env HOME="$PHOME" TREES_DEST="$PPDEST" \
+  TREES_BASE_URL="file://$SERVE" bash < "$BOOT/install.sh" 2>&1)
+rc=$?
+assert_eq "piped bootstrap exits 0" "$rc" "0"
+assert_not_contains "piped bootstrap has no unbound-variable error" \
+  "$out" "unbound variable"
+assert_ok "piped bootstrap placed the binary" test -x "$PPDEST/git-trees"
+assert_ok "piped bootstrap seeded the template" \
+  test -f "$PHOME/.config/git-trees/AGENTS.md"
+
+# The wget fallback and the neither-downloader error, on a PATH built to contain
+# exactly what each case needs. macOS ships /usr/bin/curl, so proving the
+# fallback runs at all means excluding the real curl from PATH.
+STUBBIN="$TMP/stub-bin"
+mkdir -p "$STUBBIN"
+for c in bash mkdir install cp mktemp rm cat dirname pwd sed find chmod wc tr; do
+  cbin=$(command -v "$c") && ln -sf "$cbin" "$STUBBIN/$c"
+done
+
+WHOME="$TMP/boot-wget-home"
+WDEST="$TMP/boot-wget-bin"
+mkdir -p "$WHOME"
+out=$(env -i HOME="$WHOME" PATH="$STUBBIN" TREES_DEST="$WDEST" \
+  TREES_BASE_URL="file://$SERVE" "$STUBBIN/bash" "$BOOT/install.sh" 2>&1)
+rc=$?
+assert_eq "bootstrap fails with neither curl nor wget" "$rc" "1"
+assert_contains "bootstrap names the missing tools" "$out" "need curl or wget"
+assert_fail "bootstrap installed nothing without a downloader" \
+  test -e "$WDEST/git-trees"
+
+# Minimal wget standing in for the real thing: only the -qO form install.sh
+# uses, over file://. Exits nonzero on a missing source, as wget does.
+cat > "$STUBBIN/wget" <<'WGET_STUB'
+#!/usr/bin/env bash
+out=""; url=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -qO) out="$2"; shift 2 ;;
+    -q) shift ;;
+    *) url="$1"; shift ;;
+  esac
+done
+src="${url#file://}"
+[ -f "$src" ] || exit 8
+cat "$src" > "$out"
+WGET_STUB
+chmod +x "$STUBBIN/wget"
+
+out=$(env -i HOME="$WHOME" PATH="$STUBBIN" TREES_DEST="$WDEST" \
+  TREES_BASE_URL="file://$SERVE" "$STUBBIN/bash" "$BOOT/install.sh" 2>&1)
+rc=$?
+assert_eq "bootstrap via wget exits 0" "$rc" "0"
+assert_ok "bootstrap via wget placed the binary" test -x "$WDEST/git-trees"
+assert_eq "bootstrap via wget binary matches the source" \
+  "$(cat "$WDEST/git-trees")" "$(cat "$REPO/git-trees")"
+assert_ok "bootstrap via wget seeded the template" \
+  test -f "$WHOME/.config/git-trees/AGENTS.md"
+
+# A zero-byte body is the truncated-download case: curl succeeds (the transfer
+# completed), so only the non-empty check catches it. Installing an empty
+# git-trees onto PATH is the worst outcome here, hence its own fixture.
+TRUNC="$TMP/serve-truncated"
+mkdir -p "$TRUNC"
+: > "$TRUNC/git-trees"
+cp "$REPO/AGENTS.md.template" "$TRUNC/AGENTS.md.template"
+THOME="$TMP/boot-trunc-home"
+TDEST="$TMP/boot-trunc-bin"
+mkdir -p "$THOME"
+out=$(HOME="$THOME" TREES_DEST="$TDEST" TREES_BASE_URL="file://$TRUNC" \
+  bash "$BOOT/install.sh" 2>&1)
+rc=$?
+assert_eq "bootstrap rejects a zero-byte download" "$rc" "1"
+assert_contains "bootstrap says why the empty download failed" \
+  "$out" "failed to download git-trees"
+assert_fail "bootstrap installed nothing from a zero-byte download" \
+  test -e "$TDEST/git-trees"
+
+# A present script with a missing template warns and still installs the binary.
+ONLY="$TMP/serve-binary-only"
+mkdir -p "$ONLY"
+cp "$REPO/git-trees" "$ONLY/git-trees"
+NHOME="$TMP/boot-notmpl-home"
+NDEST="$TMP/boot-notmpl-bin"
+mkdir -p "$NHOME"
+out=$(HOME="$NHOME" TREES_DEST="$NDEST" TREES_BASE_URL="file://$ONLY" \
+  bash "$BOOT/install.sh" 2>&1)
+rc=$?
+assert_eq "bootstrap without a template exits 0" "$rc" "0"
+assert_ok "bootstrap without a template still installs" test -x "$NDEST/git-trees"
+assert_contains "bootstrap warns about the missing template" "$out" "AGENTS.md.template"
+assert_fail "bootstrap wrote no config template" \
+  test -e "$NHOME/.config/git-trees/AGENTS.md"
 
 # --- rm ----------------------------------------------------------------------
 
@@ -548,6 +841,207 @@ assert_fail "custom rm deleted branch" git show-ref --verify --quiet refs/heads/
 
 assert_fail "rm with no argument" bash "$T" rm
 assert_fail "rm with nonexistent target" bash "$T" rm nonexistent
+
+
+# --- sync --------------------------------------------------------------------
+
+# These fixtures mutate the shared $ORIGIN, so they commit on `feature-x` ONLY,
+# never on `main`. Every new_container clones $ORIGIN and `clean` below derives
+# its expectations from main's history; a commit on main here would change what
+# later sections see. The `clean` section must still run last for the same
+# reason — it mutates main.
+section "sync"
+SYNC_C=$(new_container sync-c)
+cd "$SYNC_C" || exit 1
+
+assert_ok "sync: add feature-x worktree" bash "$T" add feature-x --no-push
+assert_ok "sync: feature-x tracks origin" \
+  in_dir feature-x git rev-parse --abbrev-ref '@{upstream}'
+
+# Advance origin/feature-x behind the container's back. Asserted step by step:
+# a fixture that failed quietly would leave feature-x already up to date, and
+# every assertion below would pass without testing anything.
+assert_ok "sync: checkout feature-x on origin" in_dir "$ORIGIN" git checkout -q feature-x
+echo "upstream change" > "$ORIGIN/upstream.txt"
+assert_ok "sync: stage upstream change" in_dir "$ORIGIN" git add upstream.txt
+assert_ok "sync: commit upstream change" in_dir "$ORIGIN" git commit -qm "upstream commit"
+assert_ok "sync: leave origin on main" in_dir "$ORIGIN" git checkout -q main
+
+before_head=$(git -C "$SYNC_C/feature-x" rev-parse HEAD)
+before_remote=$(git -C "$SYNC_C" rev-parse origin/feature-x)
+
+# Fetch only: the remote-tracking ref advances, the work tree does not.
+assert_ok "sync (fetch only) exits 0" bash "$T" sync
+assert_eq "sync fetch advanced origin/feature-x" \
+  "$(git -C "$SYNC_C" rev-parse origin/feature-x)" \
+  "$(git -C "$ORIGIN" rev-parse feature-x)"
+assert_fail "sync fetch actually moved the remote ref" \
+  test "$before_remote" = "$(git -C "$SYNC_C" rev-parse origin/feature-x)"
+assert_eq "sync fetch left the worktree HEAD alone" \
+  "$(git -C "$SYNC_C/feature-x" rev-parse HEAD)" "$before_head"
+assert_fail "sync fetch did not write the upstream file" test -e feature-x/upstream.txt
+
+# --pull fast-forwards and names the branch on stdout.
+out=$(bash "$T" sync --pull 2>/dev/null)
+assert_contains "sync --pull names the updated branch on stdout" "$out" "feature-x"
+assert_eq "sync --pull fast-forwarded the worktree" \
+  "$(git -C "$SYNC_C/feature-x" rev-parse HEAD)" \
+  "$(git -C "$SYNC_C" rev-parse origin/feature-x)"
+assert_ok "sync --pull applied the upstream file" test -e feature-x/upstream.txt
+
+# A dirty worktree is skipped: nonzero exit, uncommitted work preserved, and the
+# upstream change NOT applied over it.
+assert_ok "sync: checkout feature-x on origin again" in_dir "$ORIGIN" git checkout -q feature-x
+echo "second upstream change" > "$ORIGIN/upstream2.txt"
+assert_ok "sync: stage second upstream change" in_dir "$ORIGIN" git add upstream2.txt
+assert_ok "sync: commit second upstream change" in_dir "$ORIGIN" git commit -qm "second upstream commit"
+assert_ok "sync: back to main on origin" in_dir "$ORIGIN" git checkout -q main
+
+echo "my work in progress" > feature-x/dirty.txt
+assert_fail "sync --pull exits nonzero on a dirty worktree" bash "$T" sync feature-x --pull
+out=$(bash "$T" sync feature-x --pull 2>&1 >/dev/null)
+assert_contains "sync reports the dirty skip" "$out" "uncommitted changes"
+assert_ok "sync left the uncommitted file in place" test -e feature-x/dirty.txt
+assert_fail "sync did not apply the upstream change over dirty work" \
+  test -e feature-x/upstream2.txt
+rm -f feature-x/dirty.txt
+
+# Clean again, so the pending upstream commit lands and later cases start level.
+assert_ok "sync --pull after cleaning the worktree" bash "$T" sync feature-x --pull
+assert_ok "sync applied the second upstream change" test -e feature-x/upstream2.txt
+
+# Single target by branch name and by path both resolve to the same worktree.
+out=$(bash "$T" sync feature-x --pull 2>/dev/null)
+assert_eq "sync by branch name targets only that worktree" "$out" "feature-x"
+out=$(bash "$T" sync "$SYNC_C/feature-x" --pull 2>/dev/null)
+assert_eq "sync by path targets only that worktree" "$out" "feature-x"
+
+# No upstream: skipped, named, and counted as a failure.
+assert_ok "sync: add branch with no upstream" bash "$T" add no-upstream --no-push
+assert_fail "sync --pull exits nonzero with an untracked branch" \
+  bash "$T" sync no-upstream --pull
+out=$(bash "$T" sync no-upstream --pull 2>&1 >/dev/null)
+assert_contains "sync reports the missing upstream" "$out" "no upstream"
+assert_contains "sync names track as the remedy" "$out" "git trees track"
+
+# Detached HEAD: reported, but not a failure on its own — detaching is
+# deliberate, and failing would make `sync --pull` permanently nonzero.
+assert_ok "sync: add detached worktree" bash "$T" add detached-wt --no-push
+assert_ok "sync: detach its HEAD" \
+  in_dir detached-wt git -c advice.detachedHead=false checkout -q HEAD~0 --detach
+out=$(bash "$T" sync "$SYNC_C/detached-wt" --pull 2>&1 >/dev/null)
+assert_contains "sync reports the detached HEAD skip" "$out" "detached HEAD"
+assert_ok "sync --pull exits 0 for a detached worktree alone" \
+  bash "$T" sync "$SYNC_C/detached-wt" --pull
+
+# Divergence: --ff-only refuses (git exits 128, not 1 — assert nonzero only),
+# the local commit survives, and --rebase gets past it keeping both commits.
+assert_ok "sync: checkout feature-x on origin for divergence" \
+  in_dir "$ORIGIN" git checkout -q feature-x
+echo "diverging upstream" > "$ORIGIN/diverge-remote.txt"
+assert_ok "sync: stage diverging upstream" in_dir "$ORIGIN" git add diverge-remote.txt
+assert_ok "sync: commit diverging upstream" in_dir "$ORIGIN" git commit -qm "diverging upstream commit"
+assert_ok "sync: origin back to main after divergence" in_dir "$ORIGIN" git checkout -q main
+
+echo "diverging local" > feature-x/diverge-local.txt
+assert_ok "sync: stage diverging local" in_dir feature-x git add diverge-local.txt
+assert_ok "sync: commit diverging local" in_dir feature-x git commit -qm "diverging local commit"
+local_commit=$(git -C "$SYNC_C/feature-x" rev-parse HEAD)
+
+assert_fail "sync --pull --ff-only exits nonzero when diverged" \
+  bash "$T" sync feature-x --pull --ff-only
+out=$(bash "$T" sync feature-x --pull --ff-only 2>&1 >/dev/null)
+assert_contains "sync reports the divergence" "$out" "diverged"
+assert_contains "sync names --rebase as the remedy" "$out" "--rebase"
+assert_eq "sync --ff-only preserved the local commit" \
+  "$(git -C "$SYNC_C/feature-x" rev-parse HEAD)" "$local_commit"
+
+assert_ok "sync --pull --rebase gets past the divergence" \
+  bash "$T" sync feature-x --pull --rebase
+assert_ok "sync --rebase kept the local change" test -e feature-x/diverge-local.txt
+assert_ok "sync --rebase applied the upstream change" test -e feature-x/diverge-remote.txt
+assert_ok "sync --rebase left no rebase in progress" \
+  test ! -d "$(git -C "$SYNC_C/feature-x" rev-parse --git-path rebase-merge)"
+
+# Argument validation.
+assert_fail "sync rejects --ff-only with --rebase" \
+  bash "$T" sync --pull --ff-only --rebase
+out=$(bash "$T" sync --pull --ff-only --rebase 2>&1 >/dev/null)
+assert_contains "sync explains the strategy conflict" "$out" "mutually exclusive"
+assert_fail "sync rejects --ff-only without --pull" bash "$T" sync --ff-only
+assert_fail "sync rejects --rebase without --pull" bash "$T" sync --rebase
+out=$(bash "$T" sync --rebase 2>&1 >/dev/null)
+assert_contains "sync explains that a strategy needs --pull" "$out" "requires --pull"
+assert_fail "sync rejects an unknown option" bash "$T" sync --nope
+assert_fail "sync rejects a second positional" bash "$T" sync feature-x extra
+assert_fail "sync rejects a nonexistent target" bash "$T" sync definitely-not-a-worktree
+
+# An existing directory git does not know as a worktree. Without the
+# registration gate in _sync_target this resolved to a real path, matched no
+# worktree in the pull loop, and exited 0 having done nothing — the silent
+# no-op is the regression, so assert the exit status and the message.
+mkdir -p not-a-worktree
+assert_fail "sync rejects an unregistered directory" \
+  bash "$T" sync not-a-worktree --pull
+out=$(bash "$T" sync not-a-worktree --pull 2>&1 >/dev/null)
+assert_contains "sync names the unregistered directory" "$out" "is not a worktree"
+rmdir not-a-worktree
+
+assert_fail "sync outside a repo" in_dir "$TMP/plain" bash "$T" sync
+# --- prune -------------------------------------------------------------------
+
+# Fixtures here must not mutate the shared $ORIGIN — everything stays inside
+# this container, so the section is safe to run before clean.
+section "prune"
+PR_C=$(new_container prune-c)
+cd "$PR_C" || exit 1
+
+# A container with every worktree present has nothing to prune.
+out=$(bash "$T" prune 2>/dev/null)
+assert_eq "prune on a clean container prints nothing to stdout" "$out" ""
+assert_ok "prune on a clean container exits 0" bash "$T" prune
+out=$(bash "$T" prune 2>&1)
+assert_contains "prune reports nothing to prune on stderr" "$out" "nothing to prune"
+
+# Delete a worktree directory behind git's back, the way a user would.
+assert_ok "create worktree to prune" bash "$T" add prune-target --no-push
+assert_ok "prune target directory exists" test -d prune-target
+rm -rf prune-target
+assert_ok "stale entry still registered before prune" \
+  test -d "$PR_C/trees-bare.git/worktrees/prune-target"
+
+out=$(bash "$T" prune --dry-run 2>/dev/null)
+assert_eq "dry run names the stale worktree on stdout" "$out" "prune-target"
+assert_ok "dry run leaves the metadata intact" \
+  test -d "$PR_C/trees-bare.git/worktrees/prune-target"
+out=$(bash "$T" prune --dry-run 2>&1)
+assert_contains "dry run says it was a dry run" "$out" "dry run"
+
+out=$(bash "$T" prune 2>/dev/null)
+assert_eq "prune names the stale worktree on stdout" "$out" "prune-target"
+assert_fail "prune removed the stale metadata" \
+  test -d "$PR_C/trees-bare.git/worktrees/prune-target"
+# The branch is the whole reason prune is safe without --apply: it survives.
+assert_ok "prune left the branch alone" \
+  git show-ref --verify --quiet refs/heads/prune-target
+assert_not_contains "pruned worktree is gone from git worktree list" \
+  "$(git worktree list)" "prune-target"
+
+# Idempotent: a second run finds nothing and still succeeds.
+assert_ok "prune is idempotent" bash "$T" prune
+out=$(bash "$T" prune 2>/dev/null)
+assert_eq "second prune prints nothing to stdout" "$out" ""
+
+# A worktree still on disk is never a candidate.
+assert_ok "create a live worktree" bash "$T" add prune-live --no-push
+assert_ok "prune with a live worktree exits 0" bash "$T" prune
+assert_ok "prune left the live worktree directory" test -d prune-live
+assert_ok "prune left the live worktree registered" \
+  test -d "$PR_C/trees-bare.git/worktrees/prune-live"
+
+assert_fail "prune unknown option" bash "$T" prune --nope
+assert_fail "prune rejects a positional argument" bash "$T" prune extra
+assert_fail "prune outside a repo" in_dir "$TMP/plain" bash "$T" prune
 
 
 # --- clean -------------------------------------------------------------------

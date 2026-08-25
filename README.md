@@ -119,24 +119,45 @@ cd git-trees && ./install.sh              # → ~/.local/bin
 ./install.sh /usr/local/bin               # or anywhere else
 ```
 
-**Convenience — curl.** Fetches the script and the agents template (skips the
-template if that path is already occupied, including a broken symlink):
+**Convenience — one-line curl.** Same installer, downloaded and run in place.
+It fetches the script *and* the agents template (skipping the template if that
+path is already occupied, including a broken symlink):
 
 ```bash
-mkdir -p ~/.local/bin ~/.config/git-trees
-tmp=$(mktemp) && curl -fsSL -o "$tmp" \
-  https://raw.githubusercontent.com/brightdigit/git-trees/main/git-trees \
-  && mv "$tmp" ~/.local/bin/git-trees
-chmod +x ~/.local/bin/git-trees
-if [ ! -e ~/.config/git-trees/AGENTS.md ] && [ ! -L ~/.config/git-trees/AGENTS.md ]; then
-  tmp=$(mktemp) && curl -fsSL -o "$tmp" \
-    https://raw.githubusercontent.com/brightdigit/git-trees/main/AGENTS.md.template \
-    && mv "$tmp" ~/.config/git-trees/AGENTS.md
-fi
+curl -fsSL https://raw.githubusercontent.com/brightdigit/git-trees/main/install.sh | bash
 ```
+
+A piped script receives no positional arguments, so set `TREES_DEST` to install
+somewhere other than `~/.local/bin`:
+
+```bash
+TREES_DEST=/usr/local/bin curl -fsSL \
+  https://raw.githubusercontent.com/brightdigit/git-trees/main/install.sh | bash
+```
+
+The installer uses `curl` or `wget`, whichever it finds, and verifies each
+download is complete and non-empty before installing anything.
 
 `main` is the stable release. A re-install from these URLs picks up the current
 stable script and template.
+
+**Homebrew.** Not yet published — the formula lives at
+[`homebrew-tap/Formula/git-trees.rb`](homebrew-tap/Formula/git-trees.rb) (a
+[git subrepo](https://github.com/ingydotnet/git-subrepo) of
+[`brightdigit/homebrew-tap`](https://github.com/brightdigit/homebrew-tap)) and
+takes effect once it is pushed to the tap (see
+[`docs/RELEASING.md`](docs/RELEASING.md)). After that:
+
+```bash
+brew tap brightdigit/tap
+brew install git-trees
+```
+
+Homebrew installs the completions for you — both files land in Homebrew's own
+completion directories, so no `source` line is needed. The agents template is
+the exception: a formula cannot write to your home directory, so `brew install`
+bundles the template inside its prefix and prints the one line that points
+`TREES_AGENTS_TEMPLATE` at it.
 
 Either way, make sure the destination is on your `PATH`:
 
@@ -145,12 +166,61 @@ case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *)
   echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc ;; esac
 ```
 
-`install.sh` warns if it isn't; the curl path cannot. Anything on `PATH` named
-`git-trees` becomes `git trees`.
+`install.sh` warns if it isn't — either way you run it. Anything on `PATH`
+named `git-trees` becomes `git trees`.
+
+### Shell completions
+
+`install.sh` copies both completion files to `~/.config/git-trees/completions/`
+and prints the `source` line for the bash file — the one both bash and
+Homebrew's zsh `git` completion need. The zsh file is wired up by `fpath`
+rather than sourced, so it has no activation line of its own. Neither copy is
+overwritten if you have edited it, so a reinstall keeps your changes.
+
+**bash** — source the file from `~/.bashrc`, after bash-completion itself:
+
+```bash
+source ~/.config/git-trees/completions/git-trees.bash
+```
+
+**zsh** — source the same bash file from `~/.zshrc` (after oh-my-zsh /
+`bashcompinit` if you use them):
+
+```zsh
+source ~/.config/git-trees/completions/git-trees.bash
+```
+
+Homebrew's `git` completion is a bash wrapper: it dispatches `git trees` to a
+function named `_git_trees`, so the bash file is what `git trees <TAB>` needs.
+Putting only `completions/` on `fpath` wires up the standalone `git-trees`
+binary under stock zsh `_git`, but is not enough for Homebrew.
+
+Completion covers every subcommand and its own flags, and completes branch and
+worktree names for `rm` from git itself. Outside a repository it stays silent
+rather than erroring.
+
+**If you installed via the curl path**, `install.sh` never ran, so fetch the
+files yourself first:
+
+```bash
+mkdir -p ~/.config/git-trees/completions
+for f in git-trees.bash _git-trees; do
+  curl -fsSL -o ~/.config/git-trees/completions/"$f" \
+    https://raw.githubusercontent.com/brightdigit/git-trees/main/completions/"$f"
+done
+```
+
+Then add the `source` line above.
+
+The filenames are load-bearing. Git's completion dispatches `git trees` to a
+function named `_git_trees`, and stock zsh's `_git` also looks for a file named
+`_git-trees` on `fpath` for the standalone binary — renaming either one
+silently disables completion.
 
 ## Configuration
 
-All three variables are optional. Add to `~/.zshrc` (or `~/.bashrc`):
+Every variable in [**Environment**](#environment) is optional. Add to
+`~/.zshrc` (or `~/.bashrc`):
 
 ```zsh
 export TREES_ORG=your-org
@@ -211,6 +281,11 @@ Creates a worktree, handling three cases:
 | Branch exists locally | Attach worktree to it |
 | Branch exists on `origin` | Fetch, create with `--track` |
 | Branch is new | Create from `base` (default `origin/<default>`) with `--no-track` |
+
+`base` is resolved to a commit before the worktree is created. A bare name that
+exists only on `origin` resolves to `origin/<name>`, so `add newwork v1.2.0`
+starts the branch where you meant and leaves no local `v1.2.0` behind; a base
+that resolves to nothing is an error rather than a worktree on something else.
 
 > **`add` writes to the remote by default.** When pushing is enabled, upstream is
 > set afterward via `track`. If the branch does not exist on `origin`, that runs
@@ -273,6 +348,60 @@ directory.
 > you want `git worktree remove --force` semantics deliberately.
 
 
+### `git trees sync [worktree] [--pull] [--ff-only|--rebase]`
+
+Brings the container up to date with `origin`. With no positional argument it
+covers every worktree; passing one names a single worktree, by branch name or by
+path.
+
+**The default is fetch only** — it runs one `git fetch --prune origin` and stops.
+Nothing in any working tree is touched, so there is no `--apply` gate: the
+command acts immediately. Every worktree shares a single object store, so one
+fetch updates the remote-tracking refs for all of them; fetching per worktree
+would transfer nothing after the first and cost only round-trips.
+
+`--pull` then updates the working trees from the refs that fetch just brought in.
+
+| Strategy | Behavior |
+|---|---|
+| `--ff-only` (default) | `git merge --ff-only @{upstream}`; refuses to touch a diverged branch |
+| `--rebase` | `git rebase @{upstream}`; replays local commits on top of the upstream |
+
+`--ff-only` is the default because it is the only update that can neither discard
+work nor stop half-finished. The two are mutually exclusive, and passing either
+without `--pull` is an error rather than a silent no-op — `sync --rebase` that
+only fetched would look like it had rebased.
+
+There is no `git pull` under the hood, deliberately: `pull` re-fetches on every
+invocation, which would undo the single-fetch design. `merge --ff-only` and
+`rebase` against `@{upstream}` need no fetch of their own and are idempotent.
+
+Under `--pull`, a worktree is skipped when:
+
+| Situation | Behavior |
+|---|---|
+| Detached HEAD | Reported on stderr, **not** counted as a failure — detaching is deliberate |
+| No upstream | Reported, with `git trees track` named as the remedy; counted as a failure |
+| Uncommitted changes | Reported and skipped; counted as a failure |
+| Diverged under `--ff-only` | Reported, with `--rebase` named as the remedy; counted as a failure |
+| Rebase conflict | Reported; the worktree is **left mid-rebase** so you can resolve it, or run `git rebase --abort` |
+
+Dirtiness includes untracked files, matching the `dirty` column in
+[`git trees list`](#git-trees-list---json-alias-ls) and `git worktree remove`'s own
+refusal — so a stray `.DS_Store` is enough to skip a pull.
+
+The branch name of each successfully updated worktree goes to stdout, one per
+line; every notice, warning, and error goes to stderr. `sync` exits nonzero if
+any worktree was skipped for a reason above other than a detached HEAD, or if the
+fetch itself failed — in which case nothing is pulled. The loop always runs to
+completion, so a nonzero exit means partial success, not a stop.
+
+```bash
+git trees sync                            # fetch origin, touch nothing
+git trees sync --pull                     # fast-forward every clean, tracked worktree
+git trees sync feature-x --pull --rebase  # rebase one worktree onto its upstream
+```
+
 ### `git trees clean [--merged|--gone] [--apply]`
 
 Reports or removes stale worktrees and branches.
@@ -287,6 +416,24 @@ By default (without `--apply`), `clean` operates in dry-run mode and prints matc
 
 `clean --apply` keeps going when an individual removal fails, reporting each one
 on stderr, and exits nonzero if any of them did.
+
+
+### `git trees prune [--dry-run]`
+
+Drops git's administrative entries for worktree directories that are no longer on disk.
+
+When a worktree directory is deleted by hand (`rm -rf feature-x`) instead of through `git trees rm`, git keeps its bookkeeping under the bare store. The stale entry keeps showing up in `git worktree list` and holds the branch locked against a fresh checkout. `prune` clears those entries.
+
+Stale worktree names are printed to stdout, one per line; git's reason for each goes to stderr. With nothing to prune it prints a notice on stderr and exits 0.
+
+Pass `--dry-run` to list what would be dropped without touching anything.
+
+> **Unlike `rm` and `clean`, `prune` acts immediately — there is no `--apply`.** It only removes metadata for directories that are *already gone*; a worktree still on disk is never a candidate, and the branch a pruned entry held is left alone. There is no work to lose.
+
+```bash
+git trees prune --dry-run                 # list stale entries, change nothing
+git trees prune                           # drop them
+```
 
 
 
@@ -322,6 +469,7 @@ git worktree prune
 | `TREES_AGENTS_TEMPLATE` | `~/.config/git-trees/AGENTS.md` | Seeded at the container root by `init` (and `root --agents`) |
 | `TREES_NO_PUSH` | *(unset)* | Any non-empty value: `add`/`track` never create a branch on `origin` |
 | `TREES_RM_CMD` | *(unset)* | Custom command for worktree directory removal (defaults to `git worktree remove`). Bypasses git's uncommitted-work check — see [`git trees rm`](#git-trees-rm-branchpath---apply) |
+| `TREES_DEST` | `~/.local/bin` | Install destination for `install.sh`; the only way to choose one when piping the installer |
 
 ## Shell wrapper (optional)
 

@@ -1,0 +1,127 @@
+name: Homebrew tap
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to publish (e.g. v1.0.3)
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check tap token
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          if [ -z "$HOMEBREW_TAP_TOKEN" ]; then
+            echo "HOMEBREW_TAP_TOKEN secret is not set" >&2
+            echo "Create a PAT (contents:write on brightdigit/homebrew-tap and brightdigit/git-trees)" >&2
+            echo "and add it as repository secret HOMEBREW_TAP_TOKEN." >&2
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # A release event checks out the tag, which leaves HEAD detached, and
+          # both `git push` below and `git subrepo push` refuse to run that way
+          # (subrepo errors outright: "Must be on a branch to run this command").
+          # Read the default branch rather than hardcoding it so a rename here
+          # does not silently start pushing the bump to a stale branch.
+          ref: ${{ github.event.repository.default_branch }}
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          # Explicit: the bump commit and the subrepo push both reuse this
+          # credential, so the token has to survive the checkout step.
+          persist-credentials: true
+
+      - name: Install git-subrepo
+        run: |
+          git clone --depth 1 https://github.com/ingydotnet/git-subrepo.git /tmp/git-subrepo
+          echo "/tmp/git-subrepo/lib" >> "$GITHUB_PATH"
+
+      - name: Resolve tag
+        id: meta
+        # Via env, not `${{ }}` inside the script: a tag is attacker-influenced
+        # text, and the checkout above persisted a write-capable PAT.
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          case "$GITHUB_EVENT_NAME" in
+            workflow_dispatch) tag="$INPUT_TAG" ;;
+            release) tag="$RELEASE_TAG" ;;
+            *)
+              echo "Unsupported event: $GITHUB_EVENT_NAME" >&2
+              exit 1
+              ;;
+          esac
+          if [ -z "$tag" ]; then
+            echo "No tag to publish" >&2
+            exit 1
+          fi
+          case "$tag" in
+            v[0-9]*) ;;
+            *)
+              echo "Expected a v-prefixed version tag, got: $tag" >&2
+              exit 1
+              ;;
+          esac
+          # The tag reaches a URL and a commit message, so allow only characters
+          # inert in both. `/` is legal in a git ref but would build a wrong
+          # archive URL rather than fail cleanly, so it is excluded too.
+          case "$tag" in
+            *[!A-Za-z0-9._-]*)
+              echo "Tag has unexpected characters: $tag" >&2
+              exit 1
+              ;;
+          esac
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "url=https://github.com/$GITHUB_REPOSITORY/archive/refs/tags/${tag}.tar.gz" >> "$GITHUB_OUTPUT"
+
+      - name: Bump formula url and sha256
+        env:
+          URL: ${{ steps.meta.outputs.url }}
+        run: |
+          formula=homebrew-tap/Formula/git-trees.rb
+
+          # curl -f fails on a missing tag instead of hashing a 404 body.
+          sha=$(curl -fsSL "$URL" | sha256sum | awk '{ print $1 }')
+          echo "sha256=$sha"
+
+          # Read via %ENV so / in the URL cannot break the s/// delimiters.
+          # URL is already exported by the step's `env:`; SHA is computed here.
+          perl -i -pe 's/^(\s*url\s+)"[^"]*"/$1"$ENV{URL}"/' "$formula"
+          SHA="$sha" perl -i -pe 's/^(\s*sha256\s+)"[^"]*"/$1"$ENV{SHA}"/' "$formula"
+
+          grep -F "url \"$URL\"" "$formula"
+          grep -F "sha256 \"$sha\"" "$formula"
+          ruby -c "$formula"
+
+      - name: Commit formula bump
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add homebrew-tap/Formula/git-trees.rb
+          if git diff --staged --quiet; then
+            echo "Formula already at $TAG; nothing to commit"
+          else
+            git commit -m "homebrew: git-trees $TAG"
+            git push
+          fi
+
+      - name: Push subrepo to brightdigit/homebrew-tap
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          git config --global url."https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/".insteadOf "https://github.com/"
+          git subrepo push homebrew-tap

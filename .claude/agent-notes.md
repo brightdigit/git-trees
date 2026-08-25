@@ -20,3 +20,5 @@ update or remove the stale line rather than leaving both.
 - `main` is always the stable release; README curl install pins `main` (not version tags). Do not describe `main` as a development/moving target.
 - `clean` supports `--gone` and `--merged` (detecting direct, rebased, and squash-merged PRs); `--older-than` is omitted.
 - When resolving CodeRabbit review comments, verify each claim against the code before acting; report skipped findings with the reason rather than silently dropping them.
+- The Homebrew workflow owns the formula's `url`/`sha256` pair — it rewrites both together after a release is published. Do not hand-bump either: the tag's tarball sha cannot be computed before the tag exists, so editing the url alone ships a checksum mismatch.
+- Verify a review finding before acting on it *and* before rejecting it; CodeRabbit's 1.0.3 pass included a false claim that the smoke suite was broken (CI was green on both platforms) alongside three findings that were real.
