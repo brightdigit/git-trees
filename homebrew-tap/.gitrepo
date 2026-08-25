@@ -6,6 +6,7 @@
 [subrepo]
 	remote = https://github.com/brightdigit/homebrew-tap.git
 	branch = main
-	commit = 
+	commit = 9c94a73ab51d66c9141a2b3d5bd99c69ac077f58
 	method = merge
 	cmdver = 0.4.9
+	parent = 08b6fff8c93b96cf8b676efbd33f00b5ec187277
