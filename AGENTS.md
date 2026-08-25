@@ -81,6 +81,21 @@ created from `origin/main` silently gets `origin/main` as its upstream and will
 push there. The new-branch path must pass `--no-track`, then let `cmd_track` set
 the correct upstream. Live in `cmd_add`; any change there needs a fresh test.
 
+## Git pitfall: a start-point can override `-b`
+
+`git worktree add --no-track -b <new> <dir> <base>` does **not** guarantee a
+worktree on `<new>`. When `<base>` is a bare name matching a branch that exists
+only on the remote, git's DWIM reads it as "create a local branch tracking
+`origin/<base>`" and overrides `-b <new>` entirely: the worktree comes up on
+`<base>`, `<new>` is never created, a stray local `<base>` ref is left to go
+stale, and the exit status is 0. `--no-track` does not help — it governs the
+upstream, not the branch name.
+
+`cmd_add` resolves the base through `_base_sha` first (local commit-ish, else
+`origin/<base>`) and passes the sha, which leaves nothing for the DWIM to latch
+onto, and then asserts the new worktree's `HEAD` really is `<br>`. Keep both:
+the resolution is the fix, the assertion is what makes a future regression loud.
+
 ## Git pitfall: worktree paths are physical
 
 `git worktree list` reports the *physical* path. Resolve any user-supplied
@@ -129,6 +144,10 @@ What the suite covers:
   exactly `origin/feature-x` for an existing remote branch and exactly
   `origin/brandnew` for a new one; directory collision; `--print-path` emitting
   only a path; argument errors; nonzero exit when `track`/push fails
+- **add with a remote-only base** — the worktree lands on the requested branch
+  (not the base), starts at `origin/<base>`, leaves no stray local ref, and
+  tracks its own remote; an explicit `origin/<base>` behaves identically; an
+  unresolvable base fails and creates no worktree
 - **add with a slash in the branch** — the directory is slugged (`feature/x` →
   `feature-x/`, `deep/new/branch` → `deep-new-branch/`) while the ref keeps its
   slash and tracks `origin/feature/x`; a second branch slugging to a taken
