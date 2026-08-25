@@ -474,6 +474,7 @@ cmd_add() {
     # of a worktree on something the user did not ask for.
     base_sha=$(_base_sha "$base") || {
       echo "git trees add: base '$base' is not a valid commit" >&2
+      echo "git trees add: run \`git trees sync\` to fetch the latest remote branches" >&2
       return 1
     }
     # --no-track: a new branch must not inherit the base ref's upstream,

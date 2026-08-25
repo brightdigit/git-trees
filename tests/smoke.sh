@@ -404,6 +404,7 @@ assert_eq "the explicit form starts at that commit" \
 out=$(bash "$T" add frombogus no/such/base 2>&1)
 assert_fail "add on a nonexistent base fails" bash "$T" add frombogus no/such/base
 assert_contains "the error names the bad base" "$out" "no/such/base"
+assert_contains "the error suggests sync to fetch remotes" "$out" "git trees sync"
 assert_fail "no worktree was left behind for a bad base" test -e "$RB/frombogus"
 
 git -C "$ORIGIN" branch -D relbase >/dev/null 2>&1
